@@ -61,7 +61,10 @@ HUD**, so the interface is drawn on top at full sharpness instead of being inter
 - **Toggle modes** for sprint and for lock on / shield, for everyone who cannot or does not want to hold a key down.
 - Perfect guard with the attack button while the shield is up, flurry rush with mouse clicks, the jump key closes and
   reopens the paraglider.
-- **Motion control shrines with the mouse**: `T` tilts the virtual GamePad.
+- **Motion control shrines with the mouse**: `T` tilts the virtual GamePad in all three axes. The mouse tilts it
+  forward / back and sideways (the same way on screen however it lies, all the way round if you allow it), the wheel
+  turns it flat, the middle button levels it again. It follows the mouse like a GamePad in a hand, softly and no faster
+  than a hand would turn it (`Esc` → **Motion**).
 - As an option, remote bombs keep the bow on the right mouse button (Use Rune detonates them).
 
 ### Your keys on screen

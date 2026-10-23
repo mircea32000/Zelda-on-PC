@@ -55,7 +55,8 @@ namespace pce::UI
 
 		bool ValidPtr(uint32 a, uint32 len = 0x100)
 		{
-			return a >= 0x10000000 && a < 0x50000000 && memory_isAddressRangeAccessible(a, len);
+			// (the game's heaps reach past 0x50000000 with the Extended Memory mod: its main heap is 0x50000000 larger)
+			return a >= 0x10000000 && a < 0xF0000000 && memory_isAddressRangeAccessible(a, len);
 		}
 
 		std::string ReadName(uint32 pane)

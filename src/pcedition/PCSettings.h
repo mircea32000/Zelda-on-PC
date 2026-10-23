@@ -52,6 +52,7 @@ namespace pce
 		CameraLeft,
 		CameraRight,
 		TiltMode,
+		TiltLevel,    // while Motion Control is active: the slate back to flat
 		Settings,
 		MenuPrevPage, // L (inventory: Adventure Log / Inventory / System)
 		MenuNextPage, // R
@@ -110,8 +111,12 @@ namespace pce
 		bool tiltInvertX = false;
 		bool tiltInvertY = false;
 		bool tiltToggle = true;             // true: key toggles tilt mode, false: hold
-		float tiltMaxAngle = 60.0f;         // degrees
+		float tiltMaxAngle = 60.0f;         // degrees (forward / back and left / right; up to 180: upside down)
 		float tiltReturnSpeed = 0.0f;       // deg/s auto-centering (0 = off)
+		float tiltTurnStep = 15.0f;         // degrees the GamePad turns flat (yaw) per mouse wheel notch
+		bool tiltInvertTurn = false;
+		float tiltSmoothing = 35.0f;        // ms: time constant of the spring the slate follows the mouse with (0 = at once)
+		float tiltMaxSpeed = 300.0f;        // deg/s the slate turns at most (quicker mouse movement is not used)
 
 		// graphics (applied through graphic packs / renderer)
 		int resolutionPreset = 1;           // index into resolution list

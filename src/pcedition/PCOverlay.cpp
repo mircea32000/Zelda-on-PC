@@ -417,7 +417,15 @@ namespace pce::Overlay
 				p.items.push_back(toggle("Toggle Mode", &sEdit.tiltToggle, "ON: the Motion Control key toggles tilting. OFF: hold the key to tilt."));
 				p.items.push_back(toggle("Invert Tilt Left / Right", &sEdit.tiltInvertX, ""));
 				p.items.push_back(toggle("Invert Tilt Forward / Back", &sEdit.tiltInvertY, ""));
-				p.items.push_back(slider("Maximum Tilt", &sEdit.tiltMaxAngle, 15.0f, 90.0f, 1.0f, "%.0f\xC2\xB0", "Largest tilt angle reachable with the mouse."));
+				p.items.push_back(slider("Maximum Tilt", &sEdit.tiltMaxAngle, 15.0f, 180.0f, 1.0f, "%.0f\xC2\xB0",
+										 "Largest tilt angle reachable with the mouse. At 180\xC2\xB0 it turns all the way round, also upside down."));
+				p.items.push_back(slider("Turn per Wheel Notch", &sEdit.tiltTurnStep, 1.0f, 45.0f, 1.0f, "%.0f\xC2\xB0",
+										 "While Motion Control is active the mouse wheel turns the Sheikah Slate flat (left / right, like a steering wheel lying on a table)."));
+				p.items.push_back(toggle("Invert Turn", &sEdit.tiltInvertTurn, ""));
+				p.items.push_back(slider("Maximum Turn Speed", &sEdit.tiltMaxSpeed, 60.0f, 1000.0f, 10.0f, "%.0f\xC2\xB0/s",
+										 "The Sheikah Slate turns no faster than a hand would: quicker mouse movement is not used, so a flick does not throw it over."));
+				p.items.push_back(slider("Tilt Smoothing", &sEdit.tiltSmoothing, 0.0f, 150.0f, 5.0f, "%.0f ms",
+										 "How softly the Sheikah Slate starts and stops turning. 0 = it follows the mouse at once."));
 				p.items.push_back(slider("Auto Level Speed", &sEdit.tiltReturnSpeed, 0.0f, 120.0f, 5.0f, "%.0f\xC2\xB0/s", "Slowly levels the slate when the mouse rests. 0 = off."));
 				pages.push_back(std::move(p));
 			}
@@ -628,13 +636,20 @@ namespace pce::Overlay
 			}
 		}
 
+		// a key of "Level the Slate" works only while Motion Control is active: it can share a key with a gameplay
+		// action (its default is the Scope's middle mouse button)
+		bool CanShareKey(Action a, Action b)
+		{
+			return (a == Action::TiltLevel) != (b == Action::TiltLevel) && a != Action::TiltMode && b != Action::TiltMode;
+		}
+
 		bool KeyHasConflict(Action a, Key k)
 		{
 			if (k == Key::None)
 				return false;
 			for (size_t i = 0; i < kActionCount; i++)
 			{
-				if ((Action)i == a)
+				if ((Action)i == a || CanShareKey(a, (Action)i))
 					continue;
 				for (Key o : sEdit.bindings[i].keys)
 					if (o == k)
@@ -647,7 +662,7 @@ namespace pce::Overlay
 		{
 			for (size_t i = 0; i < kActionCount; i++)
 			{
-				if ((Action)i == a)
+				if ((Action)i == a || CanShareKey(a, (Action)i))
 					continue;
 				for (Key o : sEdit.bindings[i].keys)
 					if (o == k)

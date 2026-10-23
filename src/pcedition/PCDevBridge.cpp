@@ -720,12 +720,13 @@ namespace pce::DevBridge
 				}
 				if (c == "tiltset")
 				{
-					// tiltset <pitch> <roll> (degrees) | tiltset off
+					// tiltset <pitch> <roll> [yaw] (degrees) | tiltset off
 					dbg.overrideTilt = a.size() >= 3;
 					if (a.size() >= 3)
 					{
 						dbg.overrideTiltPitch = f(1);
 						dbg.overrideTiltRoll = f(2);
+						dbg.overrideTiltYaw = a.size() >= 4 ? f(3) : 0.0f;
 					}
 					return "ok";
 				}

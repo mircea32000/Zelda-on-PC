@@ -48,6 +48,7 @@ namespace pce
 			{"CameraLeft", "Camera Left", "Camera", {Key::None, Key::None}},
 			{"CameraRight", "Camera Right", "Camera", {Key::None, Key::None}},
 			{"TiltMode", "Motion Control (Tilt)", "Camera", {K('T'), Key::None}},
+			{"TiltLevel", "Motion Control: Level the Slate", "Camera", {Key::MouseMiddle, Key::None}},
 			{"Settings", "PC Settings", "Menus", {Key::Escape, Key::F1}},
 			{"MenuPrevPage", "Inventory: Previous Page", "Menus", {Key::PageUp, Key::None}},
 			{"MenuNextPage", "Inventory: Next Page", "Menus", {Key::PageDown, Key::None}},
@@ -203,6 +204,10 @@ namespace pce
 			Get(m, "Tilt", "Toggle", s.tiltToggle);
 			Get(m, "Tilt", "MaxAngle", s.tiltMaxAngle);
 			Get(m, "Tilt", "ReturnSpeed", s.tiltReturnSpeed);
+			Get(m, "Tilt", "TurnStep", s.tiltTurnStep);
+			Get(m, "Tilt", "InvertTurn", s.tiltInvertTurn);
+			Get(m, "Tilt", "Smoothing", s.tiltSmoothing);
+			Get(m, "Tilt", "MaxSpeed", s.tiltMaxSpeed);
 			Get(m, "Graphics", "Resolution", s.resolutionPreset);
 			Get(m, "Graphics", "AspectRatio", s.aspectRatio);
 			Get(m, "Graphics", "UltrawideHUD", s.ultrawideHud);
@@ -301,7 +306,11 @@ namespace pce
 		o << "InvertY=" << b(s.tiltInvertY) << "\n";
 		o << "Toggle=" << b(s.tiltToggle) << "\n";
 		o << "MaxAngle=" << s.tiltMaxAngle << "\n";
-		o << "ReturnSpeed=" << s.tiltReturnSpeed << "\n\n";
+		o << "ReturnSpeed=" << s.tiltReturnSpeed << "\n";
+		o << "TurnStep=" << s.tiltTurnStep << "\n";
+		o << "InvertTurn=" << b(s.tiltInvertTurn) << "\n";
+		o << "Smoothing=" << s.tiltSmoothing << "\n";
+		o << "MaxSpeed=" << s.tiltMaxSpeed << "\n\n";
 		o << "[Graphics]\n";
 		o << "Resolution=" << s.resolutionPreset << "\n";
 		o << "AspectRatio=" << s.aspectRatio << "\n";

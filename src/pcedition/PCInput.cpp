@@ -425,7 +425,11 @@ namespace pce::Input
 			bool systemMenuWait = false;  // the pause menu is being opened on its System page (PC settings key)
 			uint32 systemMenuFrame = 0;
 			// tilt
-			float tiltPitch = 0.0f, tiltRoll = 0.0f; // degrees
+			// tilt: the pose the mouse and wheel set, and the one reported (follows it smoothly); fusion frame, GamePad
+			// lying flat with the screen up = (sqrt(1/2), sqrt(1/2), 0, 0)
+			Quaternionf tiltTarget{sqrtf(0.5f), sqrtf(0.5f), 0.0f, 0.0f};
+			Quaternionf tiltShown{sqrtf(0.5f), sqrtf(0.5f), 0.0f, 0.0f};
+			float tiltVel[3] = {0.0f, 0.0f, 0.0f}; // its angular velocity (rad/s, fusion frame)
 			// direct camera: keeps a tiny stick deflection while the mouse is moving
 			float manualDirX = 0.0f, manualDirY = 0.0f;
 			sint64 manualHoldUntil = 0;
@@ -1172,13 +1176,137 @@ namespace pce::Input
 			return Quaternionf(cosf(angle * 0.5f), x * s, y * s, z * s);
 		}
 
-		void FillMotion(VPADStatus& st, float pitchDeg, float rollDeg, float dt)
+		const Quaternionf kFlatPose(sqrtf(0.5f), sqrtf(0.5f), 0.0f, 0.0f); // the fusion's GamePad lying flat, screen up
+		constexpr float kDegToRad = 3.14159265f / 180.0f;
+
+		// The tilt is turned around fixed axes of the fusion's frame, the player's view of the GamePad lying flat: X its
+		// left-right axis, -Y the one pointing at the player, Z up (the screen's normal when flat). So the mouse turns it
+		// the same way on screen however it lies already (also upside down), like a trackball.
+		Quaternionf WorldRotation(float angle, float x, float y, float z, const Quaternionf& pose)
 		{
-			const float kDegToRad = 3.14159265f / 180.0f;
-			// neutral pose of the fusion: GamePad lying flat, screen facing up
-			Quaternionf pose(sqrtf(0.5f), sqrtf(0.5f), 0.0f, 0.0f);
-			pose *= AxisRotation(pitchDeg * kDegToRad, 1.0f, 0.0f, 0.0f); // pitch: around the GamePad's left-right axis
-			pose *= AxisRotation(rollDeg * kDegToRad, 0.0f, 0.0f, 1.0f);  // roll: around the axis pointing at the player
+			Quaternionf r = AxisRotation(angle, x, y, z) * pose;
+			r.NormalizeXYZW();
+			return r;
+		}
+
+		// the screen's normal in the fusion's frame (q * (0,1,0) * q^-1)
+		void ScreenNormal(const Quaternionf& q, float& nx, float& ny, float& nz)
+		{
+			nx = 2.0f * (q.x * q.y - q.w * q.z);
+			ny = 1.0f - 2.0f * (q.x * q.x + q.z * q.z);
+			nz = 2.0f * (q.y * q.z + q.w * q.x);
+		}
+
+		// turns the pose's screen normal towards up by (at most) angle radians: the tilt gets smaller, the turn stays
+		Quaternionf LevelBy(const Quaternionf& q, float angle)
+		{
+			float nx, ny, nz;
+			ScreenNormal(q, nx, ny, nz);
+			const float tilt = acosf(std::clamp(nz, -1.0f, 1.0f));
+			if (tilt < 1e-5f || angle <= 0.0f)
+				return q;
+			// axis n x up; straight upside down any horizontal axis does
+			float ax = ny, ay = -nx;
+			const float len = sqrtf(ax * ax + ay * ay);
+			if (len < 1e-5f)
+				ax = 1.0f, ay = 0.0f;
+			else
+				ax /= len, ay /= len;
+			return WorldRotation(std::min(angle, tilt), ax, ay, 0.0f, q);
+		}
+
+		float TiltOf(const Quaternionf& q)
+		{
+			float nx, ny, nz;
+			ScreenNormal(q, nx, ny, nz);
+			return acosf(std::clamp(nz, -1.0f, 1.0f));
+		}
+
+		// from a towards b: a fraction t of the way (shortest way round)
+		Quaternionf Slerp(const Quaternionf& a, Quaternionf b, float t)
+		{
+			float dot = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+			if (dot < 0.0f)
+			{
+				b = Quaternionf(-b.w, -b.x, -b.y, -b.z);
+				dot = -dot;
+			}
+			float wa = 1.0f - t, wb = t;
+			if (dot < 0.9995f)
+			{
+				const float theta = acosf(std::clamp(dot, -1.0f, 1.0f));
+				const float sn = sinf(theta);
+				wa = sinf((1.0f - t) * theta) / sn;
+				wb = sinf(t * theta) / sn;
+			}
+			Quaternionf r(a.w * wa + b.w * wb, a.x * wa + b.x * wb, a.y * wa + b.y * wb, a.z * wa + b.z * wb);
+			r.NormalizeXYZW();
+			return r;
+		}
+
+		// from a towards b by at most angle radians
+		Quaternionf TurnToward(const Quaternionf& a, const Quaternionf& b, float angle)
+		{
+			const float dot = std::fabs(a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z);
+			const float between = 2.0f * acosf(std::min(1.0f, dot));
+			return between <= angle ? b : Slerp(a, b, angle / between);
+		}
+
+		// The reported pose follows the set one like a GamePad in a hand: a critically damped spring (it starts and stops
+		// turning softly, without overshooting) whose speed is limited. tau: time constant in seconds (0: at once).
+		void FollowTilt(Quaternionf& shown, float vel[3], const Quaternionf& target, float tau, float maxSpeed, float dt)
+		{
+			if (tau <= 0.0f)
+			{
+				shown = target;
+				vel[0] = vel[1] = vel[2] = 0.0f;
+				return;
+			}
+			const float k = 1.0f / tau;
+			const int steps = std::clamp((int)std::ceil(dt / 0.004f), 1, 64); // small steps: stable for any frame time
+			const float h = dt / (float)steps;
+			for (int i = 0; i < steps; i++)
+			{
+				// the rotation from the shown pose to the set one (fusion frame) as axis * angle, the short way round
+				Quaternionf e = target * Quaternionf(shown.w, -shown.x, -shown.y, -shown.z);
+				if (e.w < 0.0f)
+					e = Quaternionf(-e.w, -e.x, -e.y, -e.z);
+				const float sn = std::sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
+				float r[3] = {0.0f, 0.0f, 0.0f};
+				if (sn > 1e-7f)
+				{
+					const float angle = 2.0f * std::atan2(sn, e.w);
+					r[0] = e.x / sn * angle;
+					r[1] = e.y / sn * angle;
+					r[2] = e.z / sn * angle;
+				}
+				float speed = 0.0f;
+				for (int a = 0; a < 3; a++)
+				{
+					vel[a] += (k * k * r[a] - 2.0f * k * vel[a]) * h;
+					speed += vel[a] * vel[a];
+				}
+				speed = std::sqrt(speed);
+				if (speed > maxSpeed)
+				{
+					for (int a = 0; a < 3; a++)
+						vel[a] *= maxSpeed / speed;
+					speed = maxSpeed;
+				}
+				if (sn < 1e-5f && speed < 1e-3f)
+				{
+					// arrived: exactly the set pose (the motion data is static again)
+					shown = target;
+					vel[0] = vel[1] = vel[2] = 0.0f;
+					return;
+				}
+				if (speed > 1e-7f)
+					shown = WorldRotation(speed * h, vel[0] / speed, vel[1] / speed, vel[2] / speed, shown);
+			}
+		}
+
+		void FillMotion(VPADStatus& st, Quaternionf pose, float dt)
+		{
 			pose.NormalizeXYZW();
 
 			// where the fusion is now
@@ -1239,9 +1367,9 @@ namespace pce::Input
 			if (IsDevMode())
 			{
 				std::lock_guard lock(sMotionInfoMutex);
-				sMotionInfo = fmt::format("pose pitch {:.2f} roll {:.2f} | rate {:.4f} {:.4f} {:.4f} | gyro {:.5f} {:.5f} {:.5f} | angle {:.5f} {:.5f} {:.5f} | "
+				sMotionInfo = fmt::format("pose ({:.3f} {:.3f} {:.3f} {:.3f}) tilt {:.1f} | rate {:.4f} {:.4f} {:.4f} | gyro {:.5f} {:.5f} {:.5f} | angle {:.5f} {:.5f} {:.5f} | "
 										  "acc {:.3f} {:.3f} {:.3f} | dir [{:.3f} {:.3f} {:.3f}] [{:.3f} {:.3f} {:.3f}] [{:.3f} {:.3f} {:.3f}]",
-										  pitchDeg, rollDeg, rate[0], rate[1], rate[2], g[0], g[1], g[2], o[0], o[1], o[2], v[0], v[1], v[2], att[0], att[1],
+										  pose.w, pose.x, pose.y, pose.z, TiltOf(pose) / kDegToRad, rate[0], rate[1], rate[2], g[0], g[1], g[2], o[0], o[1], o[2], v[0], v[1], v[2], att[0], att[1],
 										  att[2], att[3], att[4], att[5], att[6], att[7], att[8]);
 			}
 		}
@@ -1854,6 +1982,18 @@ namespace pce::Input
 		if (!inputEnabled && !s.tiltToggle)
 			sTiltActive = false;
 		const bool tilt = sTiltActive.load();
+		// while tilting, the wheel turns the GamePad flat (and does nothing else), and "Level the Slate" (by default the
+		// Scope's middle button) takes its key
+		sint32 turnNotches = 0;
+		bool levelSlate = false;
+		if (tilt)
+		{
+			turnNotches = wheel;
+			wheel = 0;
+			levelSlate = pressed(Action::TiltLevel);
+			if (down(Action::TiltLevel))
+				act[(size_t)Action::Scope] = false;
+		}
 
 		uint32 hold = 0;
 		// ---- buttons ----
@@ -2327,27 +2467,37 @@ namespace pce::Input
 		const bool aiming = scopeCamera || down(Action::Bow) || down(Action::Scope);
 		if (tilt)
 		{
-			// mouse drives the GamePad tilt
-			const float tsens = 0.05f * s.tiltSensitivity;
-			fs.tiltRoll += (float)mdx * tsens * (s.tiltInvertX ? -1.0f : 1.0f);
-			fs.tiltPitch += (float)mdy * tsens * (s.tiltInvertY ? -1.0f : 1.0f);
+			// mouse and wheel turn the GamePad, around the player's axes (the same way on screen in every pose): mouse up /
+			// down forward / back, left / right sideways, the wheel flat (yaw)
+			float tsens = 0.05f * s.tiltSensitivity * kDegToRad;
+			// a hand turns the GamePad only so fast: mouse movement quicker than the maximum speed is not used (a flick does
+			// not throw the slate over, and it stops where the mouse stops)
+			const float wanted = std::hypot((float)mdx, (float)mdy) * tsens;
+			const float allowed = s.tiltMaxSpeed * kDegToRad * (float)dt;
+			if (wanted > allowed && wanted > 0.0f)
+				tsens *= allowed / wanted;
+			Quaternionf& q = fs.tiltTarget;
+			if (levelSlate)
+				q = kFlatPose;
+			if (mdy)
+				q = WorldRotation((float)mdy * tsens * (s.tiltInvertY ? -1.0f : 1.0f), 1.0f, 0.0f, 0.0f, q);
+			if (mdx)
+				q = WorldRotation((float)mdx * tsens * (s.tiltInvertX ? -1.0f : 1.0f), 0.0f, -1.0f, 0.0f, q);
+			if (turnNotches)
+				q = WorldRotation((float)turnNotches * s.tiltTurnStep * kDegToRad * (s.tiltInvertTurn ? 1.0f : -1.0f), 0.0f, 0.0f, 1.0f, q);
 			if (s.tiltReturnSpeed > 0.0f)
-			{
-				auto toward0 = [&](float v) { float d = s.tiltReturnSpeed * (float)dt; return v > 0 ? std::max(0.0f, v - d) : std::min(0.0f, v + d); };
-				fs.tiltRoll = toward0(fs.tiltRoll);
-				fs.tiltPitch = toward0(fs.tiltPitch);
-			}
-			fs.tiltRoll = std::clamp(fs.tiltRoll, -s.tiltMaxAngle, s.tiltMaxAngle);
-			fs.tiltPitch = std::clamp(fs.tiltPitch, -s.tiltMaxAngle, s.tiltMaxAngle);
+				q = LevelBy(q, s.tiltReturnSpeed * kDegToRad * (float)dt);
+			// no more tilt than the setting (at 180 degrees it goes all the way round)
+			const float maxTilt = s.tiltMaxAngle * kDegToRad;
+			if (s.tiltMaxAngle < 179.5f && TiltOf(q) > maxTilt)
+				q = LevelBy(q, TiltOf(q) - maxTilt);
 			fs.camera.Reset();
 		}
 		else
 		{
 			// tilt off: level the slate smoothly (no rotation rate is reported, so motion aiming never jumps);
 			// once level the motion data is perfectly static
-			auto level = [&](float v) { const float step = 400.0f * (float)dt; return v > 0 ? std::max(0.0f, v - step) : std::min(0.0f, v + step); };
-			fs.tiltRoll = level(fs.tiltRoll);
-			fs.tiltPitch = level(fs.tiltPitch);
+			fs.tiltTarget = TurnToward(fs.tiltTarget, kFlatPose, 400.0f * kDegToRad * (float)dt);
 			if (selectorOwnsStick)
 			{
 				fs.camera.Reset();
@@ -2476,10 +2626,17 @@ namespace pce::Input
 		// ---- motion ----
 		if (sDebug.overrideTilt.load())
 		{
-			fs.tiltPitch = sDebug.overrideTiltPitch.load();
-			fs.tiltRoll = sDebug.overrideTiltRoll.load();
+			// fixed pose for tests: turned, then tilted forward / back, then sideways (each around the GamePad's own axes)
+			Quaternionf p = kFlatPose;
+			p *= AxisRotation(sDebug.overrideTiltYaw.load() * kDegToRad, 0.0f, 1.0f, 0.0f);
+			p *= AxisRotation(sDebug.overrideTiltPitch.load() * kDegToRad, 1.0f, 0.0f, 0.0f);
+			p *= AxisRotation(sDebug.overrideTiltRoll.load() * kDegToRad, 0.0f, 0.0f, 1.0f);
+			p.NormalizeXYZW();
+			fs.tiltTarget = fs.tiltShown = p;
+			fs.tiltVel[0] = fs.tiltVel[1] = fs.tiltVel[2] = 0.0f;
 		}
-		FillMotion(st, fs.tiltPitch, fs.tiltRoll, (float)dt);
+		FollowTilt(fs.tiltShown, fs.tiltVel, fs.tiltTarget, s.tiltSmoothing / 1000.0f, s.tiltMaxSpeed * kDegToRad, (float)dt);
+		FillMotion(st, fs.tiltShown, (float)dt);
 
 		fs.prevAction = act;
 	}

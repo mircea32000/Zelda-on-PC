@@ -110,7 +110,7 @@ namespace pce
 			std::atomic<bool> lastPointerMode{false}, lastGameMenu{false};
 			// motion tests: fixed tilt pose (degrees) instead of the mouse driven one
 			std::atomic<bool> overrideTilt{false};
-			std::atomic<float> overrideTiltPitch{0}, overrideTiltRoll{0};
+			std::atomic<float> overrideTiltPitch{0}, overrideTiltRoll{0}, overrideTiltYaw{0};
 		};
 		Debug& GetDebug();
 		// diagnostics: who reads the GamePad (return address) and how many samples it asks for
