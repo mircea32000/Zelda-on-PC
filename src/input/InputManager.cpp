@@ -53,7 +53,11 @@ InputManager::InputManager()
 
 InputManager::~InputManager()
 {
-	Shutdown();
+#if BOOST_OS_LINUX || BOOST_OS_BSD
+	Shutdown(); // a still joinable update thread at exit terminates the process on Linux
+#else
+	// destructors will not invoked forever, so we manually release resources in Shutdown().
+#endif
 }
 
 void InputManager::load() noexcept

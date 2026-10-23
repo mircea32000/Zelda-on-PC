@@ -384,7 +384,11 @@ bool CemuApp::OnInit()
 										"image with the extension .key) next to the image, or add the key as a line of 32 hex digits to "
 										"data\\keys.txt next to the executable. A keys.txt of a Cemu installation is read as well.",
 										_pathToUtf8(pce::GetDiscImageWithoutKey())));
+#if BOOST_OS_WINDOWS
+			exit(0);
+#else
 			_Exit(1);
+#endif
 		}
 		if (!pce::IsGameAvailable())
 		{
@@ -392,7 +396,11 @@ bool CemuApp::OnInit()
 							"Run the installer again and select the folder that holds your game dump (base game, update 1.5.0 and DLC, as "
 							"folders with code / content / meta, as a .wua archive, or the base game as a .wud / .wux disc image), or set it in settings.ini next to the "
 							"executable:\n\n[Game]\nPath=...");
+#if BOOST_OS_WINDOWS
+			exit(0);
+#else
 			_Exit(1);
+#endif
 		}
 		if (pce::GetUpdateVersion() != pce::kRequiredUpdateVersion)
 		{
@@ -402,7 +410,11 @@ bool CemuApp::OnInit()
 								: fmt::format("Game update version {} was found, but version 1.5.0 (v{}) is required.\n\nDump the latest update "
 											  "from your console and start again.",
 											  pce::GetUpdateVersion(), pce::kRequiredUpdateVersion));
+#if BOOST_OS_WINDOWS
+			exit(0);
+#else
 			_Exit(1);
+#endif
 		}
 	}
 

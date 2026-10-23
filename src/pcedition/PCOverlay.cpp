@@ -14,6 +14,10 @@
 #include <commdlg.h>
 #include <shellapi.h>
 #pragma comment(lib, "comdlg32.lib")
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+extern char** environ;
 #endif
 #include <mutex>
 #include <fstream>
@@ -273,9 +277,12 @@ namespace pce::Overlay
 #if BOOST_OS_WINDOWS
 			ShellExecuteW(nullptr, L"open", AmiiboDir().wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #else
-			std::string cmd = "xdg-open \"" + AmiiboDir().string() + "\" &";
-			int ret = system(cmd.c_str());
-			(void)ret;
+			// xdg-open started directly (no shell: the path is passed as it is), reaped on a thread of its own
+			const std::string dir = AmiiboDir().string();
+			char* argv[] = {(char*)"xdg-open", (char*)dir.c_str(), nullptr};
+			pid_t pid = 0;
+			if (posix_spawnp(&pid, "xdg-open", nullptr, nullptr, argv, environ) == 0)
+				std::thread([pid]() { int status = 0; waitpid(pid, &status, 0); }).detach();
 #endif
 		}
 
