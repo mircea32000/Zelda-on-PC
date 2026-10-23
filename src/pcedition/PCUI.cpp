@@ -2263,6 +2263,13 @@ namespace pce::UI
 		return o.str();
 	}
 
+	uint32 ScreenObject(const std::string& name)
+	{
+		std::lock_guard lock(sMutex);
+		auto it = sScreens.find(name);
+		return it == sScreens.end() ? 0 : it->second;
+	}
+
 	std::string DumpTree(const std::string& query)
 	{
 		std::lock_guard lock(sMutex);

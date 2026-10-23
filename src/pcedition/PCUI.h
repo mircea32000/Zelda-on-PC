@@ -186,4 +186,6 @@ namespace pce::UI
 	// developer: dump all panes of the layouts that contain a text pane with the given text / screen name
 	std::string DumpTree(const std::string& screenOrText);
 	std::string DumpTexts();
+	// developer: the game's screen object of a screen name (0 when not open)
+	uint32 ScreenObject(const std::string& name);
 }

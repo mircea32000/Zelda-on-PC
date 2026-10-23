@@ -444,6 +444,10 @@ namespace pce::Overlay
 				p.items.push_back(choice("Temperature Unit", &sEdit.temperatureUnit, {"Automatic", "Celsius", "Fahrenheit"},
 										 "Unit of the temperature on the map. Automatic: as the game decides (Fahrenheit for US English, Celsius "
 										 "otherwise)."));
+				p.items.push_back(choice("Inventory Page Turn", &sEdit.inventoryPageTurn, {"Instant", "Smooth", "Slow"},
+										 "How the inventory turns pages when you click a category or use the mouse wheel. Instant: no animation. "
+										 "Smooth: a short slide. Slow: the game's own slide. A category click always goes straight to the "
+										 "category, however many pages lie in between."));
 				p.items.push_back(toggle("Interactive Map", &sEdit.mapEnabled,
 										 "Completely enable or disable the interactive map and all its UI on the Sheikah Slate world map. (Shortcut: H on map)"));
 				p.items.push_back(toggle("Interactive Map Overlay", &sEdit.mapOverlay,
@@ -1394,6 +1398,47 @@ namespace pce::Overlay
 						sToast.c_str());
 		}
 
+		// Motion Control (tilt): while it is on the mouse tilts the Sheikah Slate instead of turning the camera, so a badge at
+		// the top shows it (it pops in when turned on); turning it off shows "OFF" fading out
+		void DrawTiltIndicator(double now)
+		{
+			static bool last = false;
+			static double changed = -10.0;
+			const bool tilt = Input::IsTiltActive();
+			if (tilt != last)
+			{
+				last = tilt;
+				changed = now;
+			}
+			const double since = now - changed;
+			if ((!tilt && since >= 1.0) || !sFonts.small)
+				return;
+			const Settings s = GetSettings();
+			std::string text = "Motion Control OFF";
+			if (tilt)
+			{
+				const Key k = s.bind(Action::TiltMode).keys[0];
+				if (k == Key::None)
+					text = "Motion Control ON";
+				else if (s.tiltToggle)
+					text = fmt::format("Motion Control ON  \xC2\xB7  {} to stop", KeyDisplayName(k));
+				else
+					text = fmt::format("Motion Control ON  \xC2\xB7  hold {}", KeyDisplayName(k));
+			}
+			const float a = tilt ? (float)std::min(1.0, since / 0.15) : (float)std::clamp(1.0 - since, 0.0, 1.0);
+			const float pop = tilt ? 1.0f + 0.25f * (float)std::max(0.0, 1.0 - since / 0.25) : 1.0f;
+			ImDrawList* dl = ImGui::GetForegroundDrawList();
+			const ImGuiIO& io = ImGui::GetIO();
+			const float fs = std::max(16.0f, io.DisplaySize.y * 0.022f) * pop;
+			const ImVec2 ts = sFonts.small->CalcTextSizeA(fs, FLT_MAX, 0.0f, text.c_str());
+			const ImVec2 p(io.DisplaySize.x * 0.5f - ts.x * 0.5f, io.DisplaySize.y * 0.085f);
+			const ImVec2 r0(p.x - fs * 0.8f, p.y - fs * 0.35f), r1(p.x + ts.x + fs * 0.8f, p.y + ts.y + fs * 0.35f);
+			auto alpha = [&](ImU32 c) { return (c & 0x00FFFFFF) | ((uint32)(((c >> 24) & 0xFF) * a) << 24); };
+			dl->AddRectFilled(r0, r1, alpha(IM_COL32(0, 0, 0, 180)), fs * 0.3f);
+			dl->AddRect(r0, r1, alpha(tilt ? kAccent : IM_COL32(140, 140, 130, 200)), fs * 0.3f, 0, 1.5f);
+			dl->AddText(sFonts.small, fs, p, alpha(tilt ? kAccent : kText), text.c_str());
+		}
+
 		void DrawQuitConfirmation(ImDrawList* dl, float W, float H, float fs)
 		{
 			if (!sConfirmQuit)
@@ -1751,6 +1796,8 @@ namespace pce::Overlay
 		DrawTipKeys();
 		DrawFpsCounter();
 		const double now = Now();
+		if (!sOpen.load())
+			DrawTiltIndicator(now);
 		const float dt = sLastTime > 0 ? (float)std::min(0.1, now - sLastTime) : 0.016f;
 		sLastTime = now;
 		if (sOpenRequest.exchange(false))

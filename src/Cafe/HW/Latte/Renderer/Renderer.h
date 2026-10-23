@@ -81,6 +81,8 @@ public:
 
 	// Zelda on PC: AMD FSR 3 frame generation inputs (see LatteRenderTarget.cpp)
 	virtual bool FSR_CaptureSnapshot(LatteTextureView* color, LatteTextureView* depth) { return false; }
+	// a frame without the 3D scene: its color replaces the snapshot color, the depth of the last scene stays
+	virtual bool FSR_CaptureColor(LatteTextureView* color) { return false; }
 	virtual void FSR_BuildMotionVectors(const float reproj[16], uint32 flags) {}
 	virtual void FSR_RequestDump(const std::string& path, int count) {}
 	struct FSRFrameParams

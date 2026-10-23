@@ -912,6 +912,8 @@ namespace
 		uint32 frames = 0, snapshots = 0, cameras = 0, prepared = 0;
 		// frame handed to FSR after the backbuffer is drawn
 		bool ready = false;
+		bool generating = false; // FSR 3 generates frames for the last presented frame
+		uint32 copies = 0;       // frames without the 3D scene handed to FSR as they are (no interpolation)
 		float frameCam[96]{};
 		uint64 lastFrameTick = 0;
 		float frameTimeMs = 16.6f;
@@ -1105,7 +1107,7 @@ static void LatteFSR_OnFrameEnd(LatteTextureView* tvView)
 		s_fsr.wanted = pce::IsActive() && pce::GetSettings().frameGeneration == 1;
 		g_renderer->FSR_SetWanted(s_fsr.wanted);
 	}
-	const bool active = (s_fsr.wanted || s_fsr.devForce) && g_renderer->GetType() == RendererAPI::Vulkan && !(pce::IsActive() && (pce::Overlay::IsGamePaused() || pce::Input::GameMenuOpen()));
+	const bool active = (s_fsr.wanted || s_fsr.devForce) && g_renderer->GetType() == RendererAPI::Vulkan && !(pce::IsActive() && pce::Overlay::IsGamePaused());
 	if (active && s_fsr.cameraValid)
 	{
 		if (!s_fsr.snapshotDone)
@@ -1150,6 +1152,22 @@ static void LatteFSR_OnFrameEnd(LatteTextureView* tvView)
 		s_fsr.ready = false;
 		s_fsr.lastFrameTick = 0;
 	}
+	if (active && !s_fsr.ready && g_renderer->FSR_IsRunning() && g_renderer->FSR_CaptureColor(tvView))
+	{
+		// no 3D scene this frame (map, inventory, fades, loading): frame generation keeps running on the frame as it is, with
+		// reset (FSR shows a copy of it in between, no interpolation). The screen keeps the steady rate it has in play; a
+		// variable refresh rate screen (FreeSync / G-Sync) flickers whenever generation stops and the rate drops.
+		static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+		g_renderer->FSR_BuildMotionVectors(kIdentity, s_fsr.mvFlags);
+		const uint64 now = HighResolutionTimer::now().getTick();
+		if (s_fsr.lastFrameTick)
+			s_fsr.frameTimeMs = (float)((double)(now - s_fsr.lastFrameTick) * 1000.0 / (double)HighResolutionTimer::getFrequency());
+		s_fsr.lastFrameTick = now;
+		s_fsr.reset = true;
+		s_fsr.prevValid = false; // the next scene frame starts without history
+		s_fsr.ready = true;
+		s_fsr.copies++;
+	}
 	s_fsr.frames++;
 	// next frame
 	s_fsr.cameraValid = false;
@@ -1182,6 +1200,7 @@ static void LatteFSR_AfterBackbuffer(sint32 x, sint32 y, sint32 w, sint32 h)
 	{
 		g_renderer->FSR_DisableGeneration();
 		s_fsr.reset = true;
+		s_fsr.generating = false;
 		return;
 	}
 	s_fsr.ready = false;
@@ -1207,7 +1226,8 @@ static void LatteFSR_AfterBackbuffer(sint32 x, sint32 y, sint32 w, sint32 h)
 	p.imageY = y;
 	p.imageWidth = w;
 	p.imageHeight = h;
-	if (g_renderer->FSR_PrepareFrame(p))
+	s_fsr.generating = g_renderer->FSR_PrepareFrame(p);
+	if (s_fsr.generating)
 	{
 		s_fsr.prepared++;
 		s_fsr.reset = false;
@@ -1246,9 +1266,9 @@ std::string LatteFSR_Command(const std::vector<std::string>& a)
 		s_fsr.debugFlags = (uint32)std::stoul(a[2], nullptr, 0);
 		return "ok";
 	}
-	return fmt::format("frames {} cameras {} snapshots {} prepared {} active {} running {} shown {:.1f} flags {} | near {} far {} aspect {} size {}x{}", s_fsr.frames,
+	return fmt::format("frames {} cameras {} snapshots {} prepared {} active {} running {} shown {:.1f} flags {} | near {} far {} aspect {} size {}x{} | generating {} copies {}", s_fsr.frames,
 		s_fsr.cameras, s_fsr.snapshots, s_fsr.prepared, g_latteFsrActive, g_renderer->FSR_IsRunning(), s_fsr.shownFps, s_fsr.mvFlags, s_fsr.cam[56], s_fsr.cam[57],
-		s_fsr.cam[62], s_fsr.cam[72], s_fsr.cam[73]);
+		s_fsr.cam[62], s_fsr.cam[72], s_fsr.cam[73], s_fsr.generating, s_fsr.copies);
 }
 
 void LatteRenderTarget_PCEIdlePresent()

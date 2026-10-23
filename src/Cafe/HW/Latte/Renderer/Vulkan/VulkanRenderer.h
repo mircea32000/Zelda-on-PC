@@ -242,6 +242,7 @@ public:
 	void SwapBuffers(bool swapTV = true, bool swapDRC = true) override;
 
 	bool FSR_CaptureSnapshot(LatteTextureView* color, LatteTextureView* depth) override;
+	bool FSR_CaptureColor(LatteTextureView* color) override;
 	void FSR_BuildMotionVectors(const float reproj[16], uint32 flags) override;
 	void FSR_RequestDump(const std::string& path, int count) override;
 	bool FSR_Supported() const;

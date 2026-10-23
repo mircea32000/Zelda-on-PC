@@ -654,6 +654,84 @@ namespace pce::Input
 			hCPU->instructionPointer = hCPU->spr.LR;
 		}
 
+		// inventory page carousel (r3 = inventory screen), before its update (0x02FF644C): a category click, or several
+		// mouse wheel notches at once, jump with the game's own page jump (0x02FF3AC0, no slide; it goes to the page in
+		// +0x1B90) to the page next to the target, and the last step slides in like a normal page turn
+		// (Menus::RequestInventoryFlick). The jump puts the game's cursor on item +0x1B94 of the page (0x02FEF4DC: first
+		// item of the page + it); left at -1 it lands on the last item of the page before, which then holds the selection
+		// off screen. +0x1B78 page count, +0x1B8C current page; category table +0x1BC0, 7 x 0x48: page count +0x20, first
+		// page +0x40. Categories without pages have no tab, so the k-th category with pages is the k-th tab. r11 = 1: jump.
+		void InvJumpTo(PPCInterpreter_t* hCPU, uint32 inv, uint32 target)
+		{
+			const uint32 cur = memory_readU32(inv + 0x1B8C);
+			if (target >= memory_readU32(inv + 0x1B78) || target == cur)
+				return;
+			const bool instant = GetSettings().inventoryPageTurn == 0;
+			const int dir = target > cur ? 1 : -1;
+			const uint32 land = instant ? target : target - dir; // the page before the target: the last step slides in
+			if (land != cur)
+			{
+				memory_writeU32(inv + 0x1B90, land);
+				memory_writeU32(inv + 0x1B94, 0);
+				hCPU->gpr[11] = 1;
+			}
+			if (!instant)
+				Menus::RequestInventoryFlick(dir);
+		}
+
+		void HLE_InvJump(PPCInterpreter_t* hCPU)
+		{
+			hCPU->gpr[11] = 0;
+			const uint32 inv = hCPU->gpr[3];
+			const int tab = Menus::TakeInventoryJump();
+			const int wheelPages = Menus::TakeInventoryJumpPages();
+			if ((tab >= 0 || wheelPages != 0) && memory_isAddressRangeAccessible(inv + 0x1B78, 0x1BC0 + 7 * 0x48 - 0x1B78))
+			{
+				if (tab >= 0)
+				{
+					int k = 0;
+					for (uint32 c = 0; c < 7; c++)
+					{
+						const uint32 e = inv + 0x1BC0 + c * 0x48;
+						if (memory_readU32(e + 0x20) == 0 || k++ != tab)
+							continue;
+						InvJumpTo(hCPU, inv, memory_readU32(e + 0x40));
+						break;
+					}
+				}
+				else
+				{
+					const int pages = (int)memory_readU32(inv + 0x1B78);
+					const int cur = (int)memory_readU32(inv + 0x1B8C);
+					if (pages > 0)
+						InvJumpTo(hCPU, inv, (uint32)std::clamp(cur + wheelPages, 0, pages - 1));
+				}
+			}
+			hCPU->instructionPointer = hCPU->spr.LR;
+		}
+
+		// inventory page slide, in place of the easing of the carousel offset (0x02FF64CC: r4 = &offset, f1 = target): page
+		// changes apply in the frame of their flick, except the slides Menus::InventorySlideMode asks for: a short slide
+		// (the offset closes most of the gap every frame) or the game's own easing (r11 = 0)
+		void HLE_SlideSnap(PPCInterpreter_t* hCPU)
+		{
+			const int mode = Menus::InventorySlideMode();
+			hCPU->gpr[11] = mode == 2 ? 0 : 1;
+			if (mode != 2 && memory_isAddressRangeAccessible(hCPU->gpr[4], 4))
+			{
+				const float target = (float)hCPU->fpr[1].fpr;
+				float next = target;
+				if (mode == 1)
+				{
+					next = target + (memory_readFloat(hCPU->gpr[4]) - target) * 0.55f; // about 10 frames from a full page
+					if (std::fabs(next - target) < 0.75f)
+						next = target;
+				}
+				memory_writeFloat(hCPU->gpr[4], next);
+			}
+			hCPU->instructionPointer = hCPU->spr.LR;
+		}
+
 		void HLE_TalkCamTick(PPCInterpreter_t* hCPU)
 		{
 			sTalkCamFrame = sDebug.frameCounter.load();
@@ -1176,6 +1254,8 @@ namespace pce::Input
 		osLib_addFunction("coreinit", "PCE_ClimbCamTick", HLE_ClimbCamTick);
 		osLib_addFunction("coreinit", "PCE_HorseCamTick", HLE_HorseCamTick);
 		osLib_addFunction("coreinit", "PCE_CycleCamTick", HLE_CycleCamTick);
+		osLib_addFunction("coreinit", "PCE_InvJump", HLE_InvJump);
+		osLib_addFunction("coreinit", "PCE_SlideSnap", HLE_SlideSnap);
 		osLib_addFunction("coreinit", "PCE_TalkCamTick", HLE_TalkCamTick);
 		osLib_addFunction("coreinit", "PCE_MagnetTick", HLE_MagnetTick);
 		osLib_addFunction("coreinit", "PCE_MagnetCamTick", HLE_MagnetCamTick);

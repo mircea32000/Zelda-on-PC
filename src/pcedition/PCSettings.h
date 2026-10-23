@@ -143,6 +143,7 @@ namespace pce
 		// game
 		std::string language = "en";        // text language (code of pce::GetGameLanguages), applied when the game starts
 		int temperatureUnit = 0;            // 0 as the game decides (Fahrenheit for US English), 1 Celsius, 2 Fahrenheit
+		int inventoryPageTurn = 1;          // category clicks / mouse wheel in the inventory: 0 instant, 1 short slide, 2 the game's slide
 
 		// interactive map (Sheikah Slate map overlay)
 		bool mapEnabled = true;             // master toggle: completely enable or disable the interactive map

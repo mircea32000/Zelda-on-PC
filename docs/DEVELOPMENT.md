@@ -61,11 +61,11 @@ Output: `bin\ZeldaOnPC_release.exe`. It runs from `bin` once `bin\settings.ini` 
 (`[Game]` / `Path=`), or when an existing Cemu installation already knows it.
 
 ```bat
-powershell -ExecutionPolicy Bypass -File tools\package.ps1 -Version 1.3.4
+powershell -ExecutionPolicy Bypass -File tools\package.ps1 -Version 1.3.5
 ```
 
-stages the files in `build\stage` and builds `installer\output\ZeldaOnPC-Setup-1.3.4.exe`. Silent installation for
-tests: `ZeldaOnPC-Setup-1.3.4.exe /VERYSILENT /GAMEDIR="D:\Games\BotW" /DIR="D:\Test"`.
+stages the files in `build\stage` and builds `installer\output\ZeldaOnPC-Setup-1.3.5.exe`. Silent installation for
+tests: `ZeldaOnPC-Setup-1.3.5.exe /VERYSILENT /GAMEDIR="D:\Games\BotW" /DIR="D:\Test"`.
 
 Regenerating the art (Python 3 with Pillow and NumPy):
 

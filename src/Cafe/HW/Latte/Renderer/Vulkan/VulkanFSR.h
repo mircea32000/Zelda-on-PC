@@ -30,6 +30,9 @@ public:
 	// copies the TV color (any layout -> caller restores) and the depth image into the snapshot images. Images must be
 	// in TRANSFER_SRC_OPTIMAL layout. Recreates the snapshot images on size / format changes.
 	bool CaptureSnapshot(VkCommandBuffer cmd, VkImage color, VkFormat colorFormat, uint32 cw, uint32 ch, VkImage depth, VkFormat depthFormat, uint32 dw, uint32 dh);
+	// a frame without the 3D scene: copies only the color into the snapshot (same size / format as the last snapshot,
+	// else false); the depth copy of the last scene stays. Color must be in TRANSFER_SRC_OPTIMAL layout.
+	bool CaptureColor(VkCommandBuffer cmd, VkImage color, VkFormat colorFormat, uint32 cw, uint32 ch);
 	// reprojection matrix: clip position in the previous frame = reproj * (ndc x, ndc y, ndc z, 1) of the current one
 	// (row major). flags: 1 = flip y, 2 = depth already in [-1, 1] range mapping (DX clip space: ndc z = depth)
 	void BuildMotionVectors(VkCommandBuffer cmd, const float reproj[16], uint32 flags);

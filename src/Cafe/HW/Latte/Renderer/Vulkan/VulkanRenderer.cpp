@@ -3305,6 +3305,20 @@ bool VulkanRenderer::FSR_CaptureSnapshot(LatteTextureView* color, LatteTextureVi
 		dt->GetFormat(), (uint32)dw, (uint32)dh);
 }
 
+bool VulkanRenderer::FSR_CaptureColor(LatteTextureView* color)
+{
+	if (!m_fsrInputs || !m_fsrInputs->HasSnapshot())
+		return false;
+	auto* ct = (LatteTextureVk*)color->baseTexture;
+	sint32 cw, ch;
+	ct->GetEffectiveSize(cw, ch, 0);
+	draw_endRenderPass();
+	VkImageSubresourceLayers cs{VK_IMAGE_ASPECT_COLOR_BIT, (uint32)color->firstMip, (uint32)color->firstSlice, 1};
+	barrier_image<SYNC_OP::ANY_TRANSFER | SYNC_OP::IMAGE_READ | SYNC_OP::IMAGE_WRITE, SYNC_OP::ANY_TRANSFER>(ct, cs, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+	ct->GetImageObj()->flagForCurrentCommandBuffer();
+	return m_fsrInputs->CaptureColor(m_state.currentCommandBuffer, ct->GetImageObj()->m_image, ct->GetFormat(), (uint32)cw, (uint32)ch);
+}
+
 void VulkanRenderer::FSR_BuildMotionVectors(const float reproj[16], uint32 flags)
 {
 	if (!m_fsrInputs || !m_fsrInputs->HasSnapshot())

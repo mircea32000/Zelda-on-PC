@@ -289,6 +289,23 @@ bool VulkanFSRInputs::CaptureSnapshot(VkCommandBuffer cmd, VkImage color, VkForm
 	return true;
 }
 
+bool VulkanFSRInputs::CaptureColor(VkCommandBuffer cmd, VkImage color, VkFormat colorFormat, uint32 cw, uint32 ch)
+{
+	if (!m_hasSnapshot || !m_layoutsInitialized || m_color.format != colorFormat || m_color.width != cw || m_color.height != ch)
+		return false;
+	Barrier(cmd, m_color.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+		VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+	VkImageCopy c{};
+	c.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	c.extent = {cw, ch, 1};
+	vkCmdCopyImage(cmd, color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_color.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+	Barrier(cmd, m_color.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+		VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
+	return true;
+}
+
 void VulkanFSRInputs::BuildMotionVectors(VkCommandBuffer cmd, const float reproj[16], uint32 flags)
 {
 	if (!m_hasSnapshot || !m_pipeline)

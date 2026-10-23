@@ -53,4 +53,15 @@ namespace pce::Menus
 	void RequestSave();
 	void RequestLoad();
 	bool MacroActive();
+
+	// inventory page carousel, called on the game thread (PCInput HLE_InvJump / HLE_SlideSnap)
+	// the category tab (left to right, as the tabs are shown) a click asked to jump to, or -1; taken once
+	int TakeInventoryJump();
+	// several mouse wheel notches at once: the pages to turn (signed), or 0; taken once
+	int TakeInventoryJumpPages();
+	// after a jump: one page turn in this direction that slides (the last step into the clicked category)
+	void RequestInventoryFlick(int dir);
+	// a page slide runs this frame: 0 apply it at once, 1 short slide, 2 the game's slide (category jump step, mouse wheel
+	// as the Inventory Page Turn setting says; every other page change at once)
+	int InventorySlideMode();
 }

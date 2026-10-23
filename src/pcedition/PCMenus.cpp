@@ -1,6 +1,8 @@
 #include "pcedition/PCMenus.h"
+#include "pcedition/PCSettings.h"
 
 #include <atomic>
+#include <chrono>
 
 namespace pce::Menus
 {
@@ -57,6 +59,7 @@ namespace pce::Menus
 		int sTabPhase = 0;      // position inside the current flick (1 frame on, 1 off)
 		uint32 sTabVerifyAt = 0;
 		int sTabRetries = 0;
+		constexpr uint32 kTabCheckFrames = 3; // frames from a flick until the shown category is read again (measured)
 
 		void RequestTab(int target, int current, uint32 frame)
 		{
@@ -64,8 +67,42 @@ namespace pce::Menus
 			sTabSteps += target - from;
 			sTabTarget = target;
 			sTabRetries = 0;
-			sTabUntil = frame + 180;
-			sTabVerifyAt = frame + 8;
+			sTabUntil = frame + 600;
+			sTabVerifyAt = frame + kTabCheckFrames;
+		}
+
+		// inventory: a category click jumps straight to the category's first page (the game's own page jump, applied on
+		// the game thread by HLE_InvJump); the check afterwards falls back to flicks if the category was not reached
+		std::atomic<int> sInvJump{-1};
+		std::atomic<int> sInvFlick{0}; // set by HLE_InvJump: the sliding last step
+		std::atomic<int> sInvJumpPages{0}; // several wheel notches: pages to jump (HLE_InvJump)
+		void JumpTab(int target, uint32 frame)
+		{
+			sInvJump = target;
+			sInvJumpPages = 0;
+			sInvFlick = 0;
+			sTabTarget = target;
+			sTabSteps = 0;
+			sTabPhase = 0;
+			sTabRetries = 0;
+			sTabUntil = frame + 600;
+			sTabVerifyAt = frame + 12;
+		}
+
+		// inventory: the mouse wheel turns one page per notch with the game's slide (eased, not snapped); notches queue
+		// up and each page starts once the previous slide has ended
+		int sWheelPages = 0;
+		uint32 sWheelNextAt = 0;
+		uint32 sSmoothUntil = 0;
+		std::atomic<bool> sSmoothSlide{false};
+		std::atomic<sint64> sLastSlideMs{0}; // last game frame with a page slide running (HLE_SlideSnap)
+		sint64 NowMs()
+		{
+			return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		}
+		bool InventorySliding()
+		{
+			return NowMs() - sLastSlideMs.load() < 40;
 		}
 
 		// inventory: rotate Link by dragging (middle button anywhere, left button on empty space)
@@ -349,6 +386,27 @@ namespace pce::Menus
 		return sMacro != Macro::None || sRequested.load() != 0;
 	}
 
+	int TakeInventoryJump()
+	{
+		return sInvJump.exchange(-1);
+	}
+
+	int TakeInventoryJumpPages()
+	{
+		return sInvJumpPages.exchange(0);
+	}
+
+	void RequestInventoryFlick(int dir)
+	{
+		sInvFlick = dir;
+	}
+
+	int InventorySlideMode()
+	{
+		sLastSlideMs = NowMs();
+		return sSmoothSlide.load() ? GetSettings().inventoryPageTurn : 0;
+	}
+
 	void UpdatePages(const UI::State& st, FrameIO& io)
 	{
 		if (int r = sPageRequest.exchange(-1); r >= 0)
@@ -401,6 +459,10 @@ namespace pce::Menus
 			sTabTarget = -1;
 			sTabSteps = 0;
 			sTabPhase = 0;
+			sInvJump = -1;
+			sInvJumpPages = 0;
+			sWheelPages = 0;
+			sSmoothSlide = false;
 			sHoverChase = false;
 			sHoverDonePart = 0;
 			io.holdAdd |= sNav.Step() | sConfirm.Step();
@@ -449,9 +511,16 @@ namespace pce::Menus
 			{
 				if (ps.targets[hover].tab >= 0)
 				{
-					// category tab: switch categories with the right stick
+					// category tab: the inventory jumps straight to the category, the adventure log switches with the right stick
 					if (ps.currentTab >= 0)
-						RequestTab(ps.targets[hover].tab, ps.currentTab, io.frame);
+					{
+						sWheelPages = 0;
+						sSmoothSlide = false;
+						if (st.inventory && !ps.questTabs)
+							JumpTab(ps.targets[hover].tab, io.frame);
+						else
+							RequestTab(ps.targets[hover].tab, ps.currentTab, io.frame);
+					}
 				}
 				else
 				{
@@ -484,9 +553,15 @@ namespace pce::Menus
 				bool overTabs = !ps.questTabs;
 				for (auto& t : ps.targets)
 					overTabs |= t.tab >= 0 && io.mouseY >= t.rect.y0 - 0.03f && io.mouseY <= t.rect.y1 + 0.05f;
-				if (ps.tabCount > 0 && ps.currentTab >= 0 && overTabs)
+				if (ps.tabCount > 0 && ps.currentTab >= 0 && overTabs && st.inventory && !ps.questTabs)
 				{
-					// inventory: the wheel flips through the categories
+					// inventory: the wheel turns the pages one by one, sliding like the game does (queued notches)
+					if (sTabTarget < 0)
+						sWheelPages = std::clamp(sWheelPages + (io.wheel > 0 ? -1 : 1) * std::abs(io.wheel), -12, 12);
+				}
+				else if (ps.tabCount > 0 && ps.currentTab >= 0 && overTabs)
+				{
+					// adventure log: the wheel flips through the categories
 					const int base = sTabTarget >= 0 ? sTabTarget : ps.currentTab;
 					RequestTab(std::clamp(base + (io.wheel > 0 ? -1 : 1) * std::min(3, std::abs(io.wheel)), 0, ps.tabCount - 1), ps.currentTab, io.frame);
 				}
@@ -494,6 +569,36 @@ namespace pce::Menus
 					sNav.Start(io.wheel > 0 ? kUp : kDown, 2, 3);
 			}
 		}
+		// the last step of a category jump slides in (see HLE_InvJump)
+		if (const int d = sInvFlick.exchange(0); d != 0)
+		{
+			sSmoothSlide = true;
+			sTabSteps = d;
+			sTabPhase = 0;
+			sSmoothUntil = io.frame + 30;
+		}
+		// wheel pages, once the previous slide has ended: one notch slides one page; several notches waiting jump over the
+		// pages in between and only the last one slides in (no catching up page by page). These slides follow the Inventory
+		// Page Turn setting, every other page change stays snapped.
+		if (sWheelPages != 0 && sTabSteps == 0 && sTabTarget < 0 && io.frame >= sWheelNextAt && !InventorySliding() &&
+			sInvJumpPages.load() == 0)
+		{
+			sSmoothSlide = true;
+			sWheelNextAt = io.frame + 4;     // the slide starts a frame or two after the flick
+			sSmoothUntil = io.frame + 30;
+			if (std::abs(sWheelPages) >= 2)
+			{
+				sInvJumpPages = sWheelPages;
+				sWheelPages = 0;
+			}
+			else
+			{
+				sTabSteps = sWheelPages;
+				sWheelPages = 0;
+			}
+		}
+		else if (sSmoothSlide.load() && sWheelPages == 0 && sTabSteps == 0 && io.frame > sSmoothUntil && !InventorySliding())
+			sSmoothSlide = false;
 		// category / page switching: one flick per page; with the slide snap patch every page change is applied in the
 		// frame of its flick (no slide animation), so a burst reaches any category in a few frames. A category request
 		// is verified afterwards, a page arrow click is a single flick.
@@ -510,16 +615,16 @@ namespace pce::Menus
 			{
 				sTabPhase = 0;
 				sTabSteps -= dir;
-				sTabVerifyAt = io.frame + 8;
+				sTabVerifyAt = io.frame + (sSmoothSlide.load() ? 30 : kTabCheckFrames); // a sliding page turn: check once it ended
 			}
 		}
-		else if (sTabTarget >= 0 && io.frame >= sTabVerifyAt)
+		else if (sTabTarget >= 0 && io.frame >= sTabVerifyAt && !InventorySliding())
 		{
-			if (ps.currentTab < 0 || ps.currentTab == sTabTarget || io.frame > sTabUntil || sTabRetries >= 2)
+			if (ps.currentTab < 0 || ps.currentTab == sTabTarget || io.frame > sTabUntil || sTabRetries >= 40)
 				sTabTarget = -1;
 			else
 			{
-				sTabSteps = sTabTarget - ps.currentTab; // categories with several pages: continue
+				sTabSteps = sTabTarget - ps.currentTab; // categories with several pages (Materials, Food...): continue until the category is reached
 				sTabRetries++;
 			}
 		}

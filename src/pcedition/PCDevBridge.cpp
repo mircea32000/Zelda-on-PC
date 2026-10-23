@@ -348,6 +348,8 @@ namespace pce::DevBridge
 					return UI::DumpTexts();
 				if (c == "uitree" && a.size() >= 2)
 					return UI::DumpTree(line.substr(line.find(' ') + 1));
+				if (c == "screenobj" && a.size() >= 2)
+					return fmt::format("{:08x}", UI::ScreenObject(a[1])); // screenobj <screen name>: the game's screen object
 				if (c == "uistate")
 				{
 					const auto& st = UI::Get(dbg.frameCounter.load());

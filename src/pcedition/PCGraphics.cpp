@@ -504,11 +504,40 @@ mtlr r0
 addi r1, r1, 0x10
 blr
 
-; inventory page carousel: the scroll offset (screen+0x1B98) snaps to its target instead of easing,
-; so a page / category change is applied in a single frame (replaces bl ease(r3, r4 = &offset, f1 = target, ...))
+; inventory page carousel: in place of easing the scroll offset (screen+0x1B98, replaces bl ease(r3, r4 = &offset,
+; f1 = target, ...)) PCE_SlideSnap sets it (at once: a page change is applied in the frame of its flick, or a short slide)
+; and returns r11 = 1; r11 = 0 keeps the game's easing (the Slow page turn setting)
 _pceSlideSnap:
-stfs f1, 0(r4)
+mflr r0
+bl import.coreinit.PCE_SlideSnap
+mtlr r0
+cmpwi r11, 0
+bne _pceSlideSnapDone
+b 0x03082AB0
+_pceSlideSnapDone:
 li r3, 1
+blr
+
+; inventory, before the page carousel update (0x02FF644C, r3 = inventory screen): PCE_InvJump r11 = 1 after it wrote the
+; first page of a clicked category to +0x1B90; the game's own page jump (0x02FF3AC0) then shows it, without sliding
+_pceInvUpdate:
+mflr r0
+stwu r1, -0x10(r1)
+stw r0, 0x14(r1)
+stw r31, 0xc(r1)
+mr r31, r3
+bl import.coreinit.PCE_InvJump
+cmpwi r11, 0
+beq _pceInvUpdateCarousel
+mr r3, r31
+bl 0x02FF3AC0
+_pceInvUpdateCarousel:
+mr r3, r31
+bl 0x02FF644C
+lwz r31, 0xc(r1)
+lwz r0, 0x14(r1)
+mtlr r0
+addi r1, r1, 0x10
 blr
 
 0x03C4BA98 = bla _pceUIText
@@ -520,6 +549,8 @@ blr
 0x0307BE94 = bla _pceRegionLanguageTemp
 0x02CB7004 = bla _pceGlideTick
 0x02FF64CC = bla _pceSlideSnap
+0x02FF6768 = bla _pceInvUpdate
+0x02FF67EC = bla _pceInvUpdate
 )";
 		}
 
