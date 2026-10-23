@@ -2,7 +2,9 @@
 
 // Zelda on PC - graphics options backed by Cemu graphic packs.
 
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace pce::Graphics
@@ -25,7 +27,7 @@ namespace pce::Graphics
 	const std::vector<std::string>& GetAAOptions();
 	const std::vector<int>& GetFpsOptions();
 
-	// copies community packs (read-only source: the user's Cemu install) and writes the PC Edition pack
+	// copies the community packs of the game (read-only source: the user's Cemu install) and writes the PC Edition pack
 	void PrepareGraphicPacks();
 	// after GraphicPack2::LoadAll(): enable packs and select presets from settings.ini
 	void ApplySettingsToPacks();
@@ -35,6 +37,37 @@ namespace pce::Graphics
 	bool RestartPending();
 	// directory of the PC Edition graphic pack (patches + content replacements)
 	fs::path GetEditionPackDir();
+
+	// mods: the graphic packs for Breath of the Wild that are not the edition's own (Graphics, FPS++, PC Edition): the
+	// community packs and the player's own, with their presets
+	struct UserPackPresets
+	{
+		std::string category;           // empty: the pack's presets have no category
+		std::vector<std::string> names; // the presets shown now (the conditions of the other categories applied)
+		int active = 0;                 // index into names
+	};
+	struct UserPack
+	{
+		std::string id;          // rules.txt path relative to the data folder, '/' separators (stored in settings)
+		std::string name;
+		std::string description;
+		std::string group;       // "Enhancements", "Mods", "Cheats", "Workarounds" or "Your Mods"
+		bool live = true;        // changes apply while the game runs (else at the next start)
+		std::vector<UserPackPresets> presets;
+	};
+	std::vector<UserPack> ListUserPacks();
+	// after the mods or their presets changed in the settings: applied to the running game where the pack allows it
+	// (patches, shaders), else RestartPending() until the next start
+	void ApplyModsLive();
+	fs::path GetModsFolder();    // <data>\graphicPacks
+	void OpenModsFolder();
+	// presets chosen for the mods (Settings::userPackPresets): (pack id, category) -> preset
+	using PackPresets = std::map<std::pair<std::string, std::string>, std::string>;
+	PackPresets ParsePackPresets(const std::string& value);
+	std::string JoinPackPresets(const PackPresets& presets);
+	// a preset chosen on the Mods page: set on the loaded pack (the presets shown for its other categories follow their
+	// conditions); the game uses it when it starts next
+	void SetUserPackPreset(const std::string& id, const std::string& category, const std::string& preset);
 
 	// display mode the main window is in (Settings::displayMode: 0 windowed, 1 borderless, 2 exclusive fullscreen); set by
 	// the window, read by the swapchain (exclusive fullscreen is a property of the swapchain)

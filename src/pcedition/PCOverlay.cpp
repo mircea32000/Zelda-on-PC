@@ -20,6 +20,10 @@
 extern char** environ;
 #endif
 #include <mutex>
+#include <deque>
+#include <set>
+#include <unordered_set>
+#include <boost/algorithm/string.hpp>
 #include <fstream>
 #include <thread>
 
@@ -105,6 +109,17 @@ namespace pce::Overlay
 		};
 
 		Settings sEdit; // working copy
+		std::vector<std::string> sModIds;
+		std::deque<bool> sModOn; // one per listed mod (deque: stable addresses)
+		// one per preset list shown on the Mods page (for the packs that are on)
+		struct ModPresetRow
+		{
+			std::string id, category;
+			std::vector<std::string> names;
+			int shown = 0; // index the row was built with
+		};
+		std::vector<ModPresetRow> sModPresetRows;
+		std::deque<int> sModPresetIdx;
 		int sPage = 0;
 		int sSel = 0;
 		float sScroll = 0.0f;        // shown scroll offset of the list (eases towards the target)
@@ -183,6 +198,41 @@ namespace pce::Overlay
 
 		void Commit()
 		{
+			if (!sModIds.empty())
+			{
+				std::set<std::string> mods;
+				std::vector<std::string> oldParts;
+				boost::split(oldParts, sEdit.userGraphicPacks, boost::is_any_of(";"));
+				for (const auto& part : oldParts)
+				{
+					if (!part.empty())
+						mods.insert(part);
+				}
+				for (size_t i = 0; i < sModIds.size() && i < sModOn.size(); i++)
+				{
+					if (sModOn[i])
+						mods.insert(sModIds[i]);
+					else
+						mods.erase(sModIds[i]);
+				}
+				sEdit.userGraphicPacks = boost::join(mods, ";");
+			}
+			if (!sModPresetRows.empty())
+			{
+				// presets chosen on the Mods page: kept in the settings, set on the loaded pack (its other preset lists follow)
+				Graphics::PackPresets presets = Graphics::ParsePackPresets(sEdit.userPackPresets);
+				for (size_t j = 0; j < sModPresetRows.size() && j < sModPresetIdx.size(); j++)
+				{
+					ModPresetRow& row = sModPresetRows[j];
+					const int idx = std::clamp(sModPresetIdx[j], 0, (int)row.names.size() - 1);
+					if (idx == row.shown)
+						continue;
+					row.shown = idx;
+					presets[{row.id, row.category}] = row.names[idx];
+					Graphics::SetUserPackPreset(row.id, row.category, row.names[idx]);
+				}
+				sEdit.userPackPresets = Graphics::JoinPackPresets(presets);
+			}
 			if (!sAudioDeviceIds.empty())
 				sEdit.audioDevice = sAudioDeviceIds[std::clamp(sAudioDeviceIndex, 0, (int)sAudioDeviceIds.size() - 1)];
 			const Settings old = GetSettings();
@@ -196,6 +246,8 @@ namespace pce::Overlay
 				Graphics::ApplyLive();
 			if (old.volume != copy.volume || old.speakers != copy.speakers || old.audioDevice != copy.audioDevice)
 				ApplyAudioLive(copy);
+			if (old.userGraphicPacks != copy.userGraphicPacks || old.userPackPresets != copy.userPackPresets)
+				Graphics::ApplyModsLive();
 		}
 
 		// ---- amiibo: files of the player's amiibo (dumps of their figures) in <data>/amiibo; when the game looks for an
@@ -467,6 +519,88 @@ namespace pce::Overlay
 				p.items.push_back(button("Open amiibo Folder", "The folder with your amiibo files. Files put there by hand are offered as well.",
 										 []() { OpenAmiiboFolder(); }));
 				p.items.push_back(button("Quit to Desktop", "Unsaved progress since the last save will be lost.", []() { sConfirmQuit = true; }));
+				pages.push_back(std::move(p));
+			}
+			{
+				Page p{"Mods"};
+				p.items.push_back(header("Graphic Packs"));
+				p.items.push_back(button("Open Mods Folder",
+										 "Mods are graphic packs (folders with a rules.txt, as in Cemu): put them here or export them with a mod manager such as BCML, they are listed from the next start. Mods of your Cemu installation are listed too.",
+										 []() {
+											 Graphics::OpenModsFolder();
+											 Toast("The mods folder opened in a window");
+										 }));
+				sModIds.clear();
+				sModOn.clear();
+				sModPresetRows.clear();
+				sModPresetIdx.clear();
+				std::unordered_set<std::string> activeMods;
+				std::vector<std::string> tokens;
+				boost::split(tokens, sEdit.userGraphicPacks, boost::is_any_of(";"));
+				for (const auto& t : tokens)
+				{
+					if (!t.empty())
+						activeMods.insert(t);
+				}
+				// the help line holds two lines of text: long descriptions are cut
+				auto shortHelp = [](std::string text) {
+					boost::replace_all(text, "\\n", " ");
+					boost::replace_all(text, "\n", " ");
+					boost::trim(text);
+					if (text.size() > 200)
+						text = text.substr(0, text.find_last_of(' ', 197)) + "...";
+					return text;
+				};
+				const auto userPacks = Graphics::ListUserPacks();
+				for (const auto& up : userPacks)
+				{
+					sModIds.push_back(up.id);
+					sModOn.push_back(activeMods.contains(up.id));
+				}
+				// the community packs by kind, then the player's own; a pack that is on shows its presets below it
+				for (const char* group : {"Enhancements", "Mods", "Cheats", "Workarounds", "Your Mods"})
+				{
+					bool headed = false;
+					for (size_t i = 0; i < userPacks.size(); i++)
+					{
+						const Graphics::UserPack& up = userPacks[i];
+						if (up.group != group)
+							continue;
+						if (!headed)
+						{
+							p.items.push_back(header(group));
+							headed = true;
+						}
+						std::string help = up.description.empty() ? fmt::format("Graphic pack: {}", up.id) : shortHelp(up.description);
+						if (!up.live)
+							help = shortHelp(help + " Applied the next time the game starts.");
+						Item it{ItemType::Toggle, up.name, std::move(help)};
+						it.bval = &sModOn[i];
+						it.restart = !up.live; // the others are applied at once
+						it.rebuild = true;     // its presets appear / disappear
+						p.items.push_back(std::move(it));
+						if (!sModOn[i])
+							continue;
+						for (const Graphics::UserPackPresets& cat : up.presets)
+						{
+							sModPresetRows.push_back({up.id, cat.category, cat.names, cat.active});
+							sModPresetIdx.push_back(cat.active);
+							Item pr{ItemType::Choice, fmt::format("    {}", cat.category.empty() ? std::string("Preset") : cat.category),
+									shortHelp(fmt::format("{}: {}.{}", up.name, cat.category.empty() ? "preset" : cat.category,
+														  up.live ? "" : " Applied the next time the game starts."))};
+							pr.ival = &sModPresetIdx.back();
+							pr.options = cat.names;
+							pr.restart = !up.live;
+							pr.rebuild = true; // the presets shown in its other lists can depend on this one
+							p.items.push_back(std::move(pr));
+						}
+					}
+					if (!headed && std::string_view(group) == "Your Mods")
+					{
+						p.items.push_back(header("Your Mods"));
+						p.items.push_back(header("None yet: put graphic packs into the mods folder"));
+					}
+				}
 				pages.push_back(std::move(p));
 			}
 			return pages;
@@ -1555,13 +1689,13 @@ namespace pce::Overlay
 			dl->AddLine(ImVec2(area.Min.x + fs, helpY - fs * 0.2f), ImVec2(area.Max.x - fs, helpY - fs * 0.2f), (kBorder & 0x00FFFFFF) | (60u << 24), 1.0f);
 			if (Input::EmbeddedFocus() || hover)
 				DrawHelp(dl, area.Min.x + fs * 1.2f, helpY + fs * 0.2f, area.GetWidth() - fs * 2.4f, fs, 1.0f, HelpText());
-			const std::string verText = std::string("PC Edition ") + kEditionVersion;
-			const float verY = Graphics::RestartPending() ? (area.Max.y - guideH - fs * 0.9f) : (area.Max.y - guideH + fs * 0.1f);
-			TextAligned(dl, sFonts.small, fs * 0.72f, ImVec2(area.Min.x + fs * 1.2f, verY), (kTextDim & 0x00FFFFFF) | (180u << 24),
-						verText, 0.0f);
+			// the line below the help: the version, or that a restart is needed (in its place: the help takes two lines)
+			const ImVec2 bottomLine(area.Min.x + fs * 1.2f, area.Max.y - guideH + fs * 0.1f);
 			if (Graphics::RestartPending())
-				TextAligned(dl, sFonts.small, fs * 0.72f, ImVec2(area.Min.x + fs * 1.2f, area.Max.y - guideH + fs * 0.1f), (kAccent & 0x00FFFFFF) | (230u << 24),
-							"Some changes apply after restarting", 0.0f);
+				TextAligned(dl, sFonts.small, fs * 0.72f, bottomLine, (kAccent & 0x00FFFFFF) | (230u << 24), "Some changes apply after restarting", 0.0f);
+			else
+				TextAligned(dl, sFonts.small, fs * 0.72f, bottomLine, (kTextDim & 0x00FFFFFF) | (180u << 24),
+							std::string("PC Edition ") + kEditionVersion, 0.0f);
 			if (Input::EmbeddedFocus())
 				DrawGuide(dl, area.Max.x - fs * 0.6f, area.Max.y - guideH, fs, 1.0f, ListGuide());
 			else
@@ -1910,11 +2044,13 @@ namespace pce::Overlay
 		const float helpY = listBottom + fs * 0.5f;
 		dl->AddLine(ImVec2(p0.x + fs, helpY), ImVec2(p1.x - fs, helpY), alpha(kBorder, 0.4f), 1.0f);
 		DrawHelp(dl, p0.x + fs * 1.6f, helpY + fs * 0.5f, pw - fs * 3.2f, fs, a, HelpText());
-		if (Graphics::RestartPending())
-			TextAligned(dl, sFonts.small, fs * 0.72f, ImVec2(p1.x - fs * 1.6f, helpY + fs * 0.55f), alpha(kAccent, 0.9f), "Some changes apply after restarting", 1.0f);
 
-		// guide bar
-		TextAligned(dl, sFonts.small, fs * 0.72f, ImVec2(p0.x + fs * 1.6f, p1.y - fs * 1.5f), alpha(kTextDim, 0.65f), verText, 0.0f);
+		// guide bar; on its left the version (also in the header), or that a restart is needed (the help can take the
+		// whole width)
+		if (Graphics::RestartPending())
+			TextAligned(dl, sFonts.small, fs * 0.72f, ImVec2(p0.x + fs * 1.6f, p1.y - fs * 1.5f), alpha(kAccent, 0.9f), "Some changes apply after restarting", 0.0f);
+		else
+			TextAligned(dl, sFonts.small, fs * 0.72f, ImVec2(p0.x + fs * 1.6f, p1.y - fs * 1.5f), alpha(kTextDim, 0.65f), verText, 0.0f);
 		DrawGuide(dl, p1.x - fs * 1.2f, p1.y - fs * 1.7f, fs, a, ListGuide());
 		DrawToast(dl, W * 0.5f, p0.y - fs * 1.2f, fs, now);
 		DrawQuitConfirmation(dl, W, H, fs);

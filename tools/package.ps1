@@ -5,7 +5,7 @@
 #
 # Requirements: Inno Setup 6.3 or newer (https://jrsoftware.org/isinfo.php) and a finished build (or pass -Build).
 # Usage: powershell -ExecutionPolicy Bypass -File tools\package.ps1 [-Version 1.3.1] [-Build] [-StageOnly]
-param([string]$Version = "1.3.6", [switch]$Build, [switch]$StageOnly)
+param([string]$Version = "1.3.7", [switch]$Build, [switch]$StageOnly)
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -21,7 +21,7 @@ if (-not (Test-Path $exe)) { throw "bin\ZeldaOnPC_release.exe was not found. Run
 
 # community graphic packs (not stored in the repository)
 $packs = Join-Path $bin "resources\pcedition\graphicPacks"
-if (-not (Test-Path (Join-Path $packs "BreathOfTheWild\Graphics\rules.txt"))) {
+if (-not (Test-Path (Join-Path $packs "BreathOfTheWild\Graphics\rules.txt")) -or -not (Test-Path (Join-Path $packs "BreathOfTheWild\Cheats\InfiniteArrows\rules.txt"))) {
     & (Join-Path $PSScriptRoot "get_graphic_packs.ps1")
 }
 

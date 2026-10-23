@@ -6,14 +6,23 @@
 #if BOOST_OS_WINDOWS
 #include <windows.h>
 #include <shlobj.h>
+#include <shellapi.h>
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+extern char** environ;
 #endif
+#include <algorithm>
 #include <fstream>
+#include <thread>
+#include <unordered_set>
 #include <boost/algorithm/string.hpp>
 
 #include "config/ActiveSettings.h"
 #include "config/CemuConfig.h"
 #include "Cafe/GraphicPack/GraphicPack2.h"
 #include "Cafe/HW/Latte/Core/Latte.h"
+#include "Cafe/HW/Latte/Core/LatteAsyncCommands.h"
 #include "Cafe/CafeSystem.h"
 
 namespace pce::Graphics
@@ -22,6 +31,10 @@ namespace pce::Graphics
 	{
 		bool sRestartPending = false;
 		Settings sAppliedAtBoot;
+		// mods: the state of each pack ("" off, else "on" and its active presets) as the game started with it and as it
+		// is applied now; a pack that cannot change while the game runs keeps its boot state until the next start
+		std::map<std::string, std::string> sModsAtBoot, sModsLive;
+		bool sModsRestartPending = false;
 
 		// The community graphic packs this edition builds on ("Graphics": resolution / shadows / anti-aliasing, "FPS++":
 		// frame rate with corrected game speed). Sources in order: the copy shipped with the edition
@@ -56,6 +69,169 @@ namespace pce::Graphics
 		fs::path PacksDir()
 		{
 			return ActiveSettings::GetUserDataPath("graphicPacks");
+		}
+
+		bool IsOwnPack(const GraphicPack2& gp)
+		{
+			std::string p = gp.GetNormalizedPathString();
+			boost::replace_all(p, "\\", "/");
+			return boost::icontains(p, "BreathOfTheWild/Graphics/rules.txt") ||
+			       boost::icontains(p, "BreathOfTheWild/Mods/FPS++/rules.txt") ||
+			       boost::icontains(p, "BotWPCEdition/rules.txt");
+		}
+
+		bool IsForBotW(const GraphicPack2& gp)
+		{
+			return gp.ContainsTitleId(0x00050000101C9300ULL) ||
+			       gp.ContainsTitleId(0x00050000101C9400ULL) ||
+			       gp.ContainsTitleId(0x00050000101C9500ULL);
+		}
+
+		std::string PackId(const GraphicPack2& gp)
+		{
+			std::string id = gp.GetNormalizedPathString();
+			boost::replace_all(id, "\\", "/");
+			return id;
+		}
+
+		// where a pack of the community set sits, below <data>/graphicPacks/BreathOfTheWild/ ("Mods/DrawDistance"), or ""
+		std::string CommunitySub(const std::string& id)
+		{
+			static const std::string kBase = "graphicPacks/BreathOfTheWild/";
+			if (!boost::istarts_with(id, kBase) || !boost::iends_with(id, "/rules.txt"))
+				return {};
+			return id.substr(kBase.size(), id.size() - kBase.size() - std::string("/rules.txt").size());
+		}
+
+		// community packs not offered on the Mods page: they fight the edition (its mouse camera, its key prompts) or are
+		// for OpenGL / old Cemu versions only (the edition always runs Vulkan)
+		bool IsHiddenPack(const std::string& id)
+		{
+			static const char* kHidden[] = {"Mods/CameraSensitivity", "Mods/ControllerLayout", "!Override/AmdIntelShadows",
+											"Workarounds/AMDShaderCrash", "Workarounds/CPUOcclusionQuery", "Workarounds/KakarikoTorchShadows",
+											"Workarounds/LWZXNullCheck", "Workarounds/NVIDIAExplosionSmoke", "Workarounds/NVIDIAStretchedClouds"};
+			const std::string sub = CommunitySub(id);
+			for (const char* h : kHidden)
+				if (boost::iequals(sub, h))
+					return true;
+			return false;
+		}
+
+		std::string PackGroup(const std::string& id)
+		{
+			const std::string sub = CommunitySub(id);
+			if (boost::iequals(sub, "Enhancements"))
+				return "Enhancements";
+			if (boost::istarts_with(sub, "Mods/"))
+				return "Mods";
+			if (boost::istarts_with(sub, "Cheats/"))
+				return "Cheats";
+			if (boost::istarts_with(sub, "Workarounds/") || boost::istarts_with(sub, "!Override/"))
+				return "Workarounds";
+			return "Your Mods";
+		}
+
+		std::string ModState(const GraphicPack2& gp)
+		{
+			if (!gp.IsEnabled())
+				return {};
+			std::string r = "on";
+			for (const auto& p : gp.GetActivePresets())
+				r += "|" + p->category + "=" + p->name;
+			return r;
+		}
+
+		// a pack whose changes take effect only when the game starts: texture rules (the textures are made at boot),
+		// replaced game files (the game has read them already), the memory layout
+		bool ModNeedsRestart(const GraphicPack2& gp)
+		{
+			static std::map<std::string, bool> cache;
+			const std::string id = PackId(gp);
+			if (auto it = cache.find(id); it != cache.end())
+				return it->second;
+			bool& r = cache[id];
+			std::error_code ec;
+			const fs::path dir = gp.GetRulesPath().parent_path();
+			for (const char* sub : {"content", "aoc", "code"})
+				if (fs::exists(dir / sub, ec))
+					return r = true;
+			if (boost::iequals(CommunitySub(id), "Mods/ExtendedMemory"))
+				return r = true;
+			std::ifstream rules(gp.GetRulesPath());
+			const std::string text((std::istreambuf_iterator<char>(rules)), std::istreambuf_iterator<char>());
+			return r = boost::icontains(text, "[TextureRedefine]");
+		}
+
+		// the game's shaders the pack replaces are compiled again (with or without the pack's version)
+		void DeleteRuntimeShaders(const GraphicPack2& gp)
+		{
+			for (const auto& shader : gp.GetCustomShaders())
+			{
+				LatteConst::ShaderType type = LatteConst::ShaderType::Pixel;
+				if (shader.type == GraphicPack2::GP_SHADER_TYPE::VERTEX)
+					type = LatteConst::ShaderType::Vertex;
+				else if (shader.type == GraphicPack2::GP_SHADER_TYPE::GEOMETRY)
+					type = LatteConst::ShaderType::Geometry;
+				LatteAsyncCommands_queueDeleteShader(shader.shader_base_hash, shader.shader_aux_hash, type);
+			}
+		}
+
+		bool sCemuModsLoaded = false;
+		void LoadCemuInstallMods()
+		{
+			if (sCemuModsLoaded)
+				return;
+			sCemuModsLoaded = true;
+
+			fs::path cemuPacks;
+#if BOOST_OS_WINDOWS
+			PWSTR path = nullptr;
+			if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &path)))
+				cemuPacks = fs::path(path) / "Cemu" / "graphicPacks";
+			CoTaskMemFree(path);
+#else
+			if (const char* home = getenv("HOME"))
+				cemuPacks = fs::path(home) / ".local" / "share" / "Cemu" / "graphicPacks";
+#endif
+
+			int count = 0;
+			std::error_code ec;
+			if (!cemuPacks.empty() && fs::exists(cemuPacks, ec))
+			{
+				for (fs::recursive_directory_iterator it(cemuPacks, ec); it != end(it); it.increment(ec))
+				{
+					if (ec)
+						break;
+					if (!it->is_directory(ec))
+						continue;
+					fs::path folder = it->path();
+					if (boost::iequals(folder.filename().string(), "downloadedGraphicPacks"))
+					{
+						it.disable_recursion_pending();
+						continue;
+					}
+					if (fs::exists(folder / "rules.txt", ec))
+					{
+						it.disable_recursion_pending();
+						fs::path rulesPath = (folder / "rules.txt").lexically_normal();
+						bool alreadyLoaded = false;
+						for (const auto& gp : GraphicPack2::GetGraphicPacks())
+						{
+							if (gp && boost::iequals(gp->GetRulesPath().lexically_normal().string(), rulesPath.string()))
+							{
+								alreadyLoaded = true;
+								break;
+							}
+						}
+						if (!alreadyLoaded)
+						{
+							GraphicPack2::LoadGraphicPack(folder);
+							count++;
+						}
+					}
+				}
+			}
+			cemuLog_log(LogType::Force, "PCE: mods from the Cemu installation: {} graphic packs", count);
 		}
 
 		std::shared_ptr<GraphicPack2> FindPack(std::string_view relDirSuffix)
@@ -601,6 +777,36 @@ blr
 			}
 			if (auto pce = FindPack("BotWPCEdition"))
 				pce->SetEnabled(true);
+
+			std::unordered_set<std::string> enabledMods;
+			std::vector<std::string> parts;
+			boost::split(parts, s.userGraphicPacks, boost::is_any_of(";"));
+			for (const auto& p : parts)
+			{
+				if (!p.empty())
+					enabledMods.insert(p);
+			}
+			const PackPresets presets = ParsePackPresets(s.userPackPresets);
+			for (const auto& gp : GraphicPack2::GetGraphicPacks())
+			{
+				if (gp && IsForBotW(*gp) && !IsOwnPack(*gp))
+				{
+					const std::string id = PackId(*gp);
+					gp->SetEnabled(enabledMods.contains(id) && !IsHiddenPack(id));
+					// presets chosen on the Mods page (kept for packs that are off as well)
+					bool any = false;
+					for (auto it = presets.lower_bound({id, std::string()}); it != presets.end() && it->first.first == id; ++it)
+					{
+						gp->SetActivePreset(it->first.second, it->second, false); // a preset the pack no longer has: validated below
+						any = true;
+					}
+					if (any)
+					{
+						gp->UpdatePresetVisibility();
+						gp->ValidatePresetSelections();
+					}
+				}
+			}
 		}
 	}
 
@@ -722,6 +928,49 @@ blr
 			if (!have)
 				cemuLog_log(LogType::Force, "PCE: graphic pack {} is missing (run tools/get_graphic_packs.ps1): the game runs at 30 FPS / 720p without it", sub);
 		}
+		// the other community packs of the game, offered on the Mods page: each copied once, from the first source that
+		// has it (the player's presets and changes in the copy are kept)
+		int copied = 0;
+		for (const fs::path& src : sources)
+		{
+			if (!fs::is_directory(src, ec))
+				continue;
+			for (fs::recursive_directory_iterator it(src, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+			{
+				if (!it->is_directory(ec) || !fs::exists(it->path() / "rules.txt", ec))
+					continue;
+				it.disable_recursion_pending(); // a pack's own folders are no packs
+				const fs::path rel = it->path().lexically_relative(src);
+				const fs::path d = dst / rel;
+				if (fs::exists(d / "rules.txt", ec))
+					continue;
+				fs::create_directories(d, ec);
+				std::error_code cec;
+				fs::copy(it->path(), d, fs::copy_options::recursive | fs::copy_options::overwrite_existing, cec);
+				cemuLog_log(LogType::Force, "PCE: copied graphic pack {} ({})", _pathToUtf8(rel), cec ? cec.message() : "ok");
+				copied++;
+			}
+			ec.clear();
+		}
+		if (copied)
+			cemuLog_log(LogType::Force, "PCE: {} community graphic packs copied", copied);
+		// Infinite Arrows only skips "count -= used" in the game's removeArrow: a stack's last arrow is still used up
+		// (the "used >= count" branch removes the stack). Skipping that branch as well keeps every stack (v1.5.0 only:
+		// the addresses of that version were checked)
+		{
+			const fs::path asmPath = dst / "Cheats" / "InfiniteArrows" / "patch_InfiniteArrows.asm";
+			std::ifstream in(asmPath);
+			std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+			in.close();
+			const std::string kNop = "0x02EB6758 = nop";
+			if (text.find(kNop) != std::string::npos && text.find("0x02EB6754") == std::string::npos)
+			{
+				const std::string eol = text.find("\r\n") != std::string::npos ? "\r\n" : "\n";
+				boost::replace_first(text, kNop, kNop + eol + "0x02EB6754 = nop ; PC Edition: the last arrow of a stack too");
+				std::ofstream(asmPath, std::ios::trunc | std::ios::binary) << text;
+				cemuLog_log(LogType::Force, "PCE: Infinite Arrows keeps the last arrow of a stack too");
+			}
+		}
 		// PC Edition pack: rules + patches are generated by the edition at startup
 		const fs::path pce = GetEditionPackDir();
 		fs::create_directories(pce, ec);
@@ -742,9 +991,182 @@ blr
 		sAppliedAtBoot = GetSettings();
 	}
 
+	std::vector<UserPack> ListUserPacks()
+	{
+		std::vector<UserPack> r;
+		std::unordered_set<std::string> seen; // the same pack from the Cemu installation and the edition's own copy: once
+		for (const auto& gp : GraphicPack2::GetGraphicPacks())
+		{
+			if (!gp || !IsForBotW(*gp) || IsOwnPack(*gp))
+				continue;
+			const std::string id = PackId(*gp);
+			if (IsHiddenPack(id) || !seen.insert(boost::to_lower_copy(gp->GetVirtualPath())).second)
+				continue;
+			UserPack p;
+			p.id = id;
+			p.name = gp->GetName();
+			boost::trim_if(p.name, boost::is_any_of("\" "));
+			p.description = gp->GetDescription();
+			p.group = PackGroup(id);
+			p.live = !ModNeedsRestart(*gp);
+			std::vector<std::string> order;
+			const auto categorized = gp->GetCategorizedPresets(order);
+			for (const std::string& category : order)
+			{
+				auto ci = categorized.find(category);
+				if (ci == categorized.end())
+					continue;
+				UserPackPresets cat;
+				cat.category = category;
+				const std::string active = gp->GetActivePreset(category);
+				for (const auto& preset : ci->second)
+				{
+					if (!preset->visible)
+						continue;
+					if (preset->name == active)
+						cat.active = (int)cat.names.size();
+					cat.names.push_back(preset->name);
+				}
+				if (!cat.names.empty())
+					p.presets.push_back(std::move(cat));
+			}
+			r.push_back(std::move(p));
+		}
+		std::stable_sort(r.begin(), r.end(), [](const UserPack& a, const UserPack& b) {
+			return boost::algorithm::ilexicographical_compare(a.name, b.name);
+		});
+		return r;
+	}
+
+	// "id|category|preset" entries separated by ';' (names with these characters are not kept)
+	PackPresets ParsePackPresets(const std::string& value)
+	{
+		PackPresets r;
+		std::vector<std::string> entries;
+		boost::split(entries, value, boost::is_any_of(";"));
+		for (const auto& e : entries)
+		{
+			std::vector<std::string> f;
+			boost::split(f, e, boost::is_any_of("|"));
+			if (f.size() == 3 && !f[0].empty() && !f[2].empty())
+				r[{f[0], f[1]}] = f[2];
+		}
+		return r;
+	}
+
+	std::string JoinPackPresets(const PackPresets& presets)
+	{
+		std::string r;
+		for (const auto& [key, preset] : presets)
+		{
+			if ((key.first + key.second + preset).find_first_of(";|") != std::string::npos)
+				continue;
+			if (!r.empty())
+				r += ';';
+			r += key.first + '|' + key.second + '|' + preset;
+		}
+		return r;
+	}
+
+	void SetUserPackPreset(const std::string& id, const std::string& category, const std::string& preset)
+	{
+		for (const auto& gp : GraphicPack2::GetGraphicPacks())
+		{
+			if (gp && PackId(*gp) == id)
+			{
+				gp->SetActivePreset(category, preset, true);
+				gp->ValidatePresetSelections();
+				return;
+			}
+		}
+	}
+
+	fs::path GetModsFolder()
+	{
+		return PacksDir();
+	}
+
+	void OpenModsFolder()
+	{
+		std::error_code ec;
+		fs::path folder = GetModsFolder();
+		fs::create_directories(folder, ec);
+#if BOOST_OS_WINDOWS
+		ShellExecuteW(nullptr, L"open", folder.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#else
+		// xdg-open started directly (no shell: the path is passed as it is), reaped on a thread of its own
+		const std::string dir = folder.string();
+		char* argv[] = {(char*)"xdg-open", (char*)dir.c_str(), nullptr};
+		pid_t pid = 0;
+		if (posix_spawnp(&pid, "xdg-open", nullptr, nullptr, argv, environ) == 0)
+			std::thread([pid]() { int status = 0; waitpid(pid, &status, 0); }).detach();
+#endif
+	}
+
 	void ApplySettingsToPacks()
 	{
+		LoadCemuInstallMods();
 		SetPacksFromSettings(GetSettings(), false);
+		for (const auto& gp : GraphicPack2::GetGraphicPacks())
+			if (gp && IsForBotW(*gp) && !IsOwnPack(*gp))
+				sModsAtBoot[PackId(*gp)] = ModState(*gp);
+		sModsLive = sModsAtBoot;
+	}
+
+	void ApplyModsLive()
+	{
+		const Settings s = GetSettings();
+		std::unordered_set<std::string> enabled;
+		std::vector<std::string> parts;
+		boost::split(parts, s.userGraphicPacks, boost::is_any_of(";"));
+		for (const auto& p : parts)
+			if (!p.empty())
+				enabled.insert(p);
+		const bool running = CafeSystem::IsTitleRunning();
+		const uint64 title = running ? CafeSystem::GetForegroundTitleId() : 0;
+		bool pending = false;
+		for (const auto& gp : GraphicPack2::GetGraphicPacks())
+		{
+			if (!gp || !IsForBotW(*gp) || IsOwnPack(*gp))
+				continue;
+			const std::string id = PackId(*gp);
+			const bool want = enabled.contains(id) && !IsHiddenPack(id);
+			gp->SetEnabled(want); // (before the game runs: it activates the enabled packs itself)
+			const std::string state = ModState(*gp);
+			if (!running || !gp->ContainsTitleId(title))
+				continue;
+			if (ModNeedsRestart(*gp))
+			{
+				pending |= state != sModsAtBoot[id];
+				continue;
+			}
+			// as Cemu's graphic packs window does it: patches are applied to / removed from the running code, the
+			// replaced shaders compiled again
+			std::string& live = sModsLive[id];
+			if (state == live)
+				continue;
+			if (want && !gp->IsActivated())
+			{
+				if (GraphicPack2::ActivateGraphicPack(gp))
+					DeleteRuntimeShaders(*gp);
+				cemuLog_log(LogType::Force, "PCE: mod on: {} ({})", gp->GetVirtualPath(), gp->IsActivated() ? "applied" : "failed");
+			}
+			else if (want)
+			{
+				DeleteRuntimeShaders(*gp);
+				gp->Reload();
+				DeleteRuntimeShaders(*gp);
+				cemuLog_log(LogType::Force, "PCE: mod presets: {}", gp->GetVirtualPath());
+			}
+			else if (gp->IsActivated())
+			{
+				DeleteRuntimeShaders(*gp);
+				GraphicPack2::DeactivateGraphicPack(gp);
+				cemuLog_log(LogType::Force, "PCE: mod off: {}", gp->GetVirtualPath());
+			}
+			live = state;
+		}
+		sModsRestartPending = pending;
 	}
 
 	bool ApplyLive()
@@ -775,6 +1197,6 @@ blr
 
 	bool RestartPending()
 	{
-		return sRestartPending;
+		return sRestartPending || sModsRestartPending;
 	}
 }

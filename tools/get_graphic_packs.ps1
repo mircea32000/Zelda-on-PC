@@ -1,5 +1,6 @@
-# Fetches the two community graphic packs Zelda on PC builds on ("Graphics" and "FPS++" for Breath of the Wild) from
-# the official Cemu graphic pack release this version was tested with, and puts them next to the executable's resources.
+# Fetches the community graphic packs for Breath of the Wild ("Graphics" and "FPS++", which Zelda on PC builds on, and
+# the optional ones offered on its Mods page) from the official Cemu graphic pack release this version was tested with,
+# and puts them next to the executable's resources.
 #
 # The packs are made by the Cemu community (https://github.com/cemu-project/cemu_graphic_packs, CC0-1.0). They are not
 # stored in this repository; the installer ships the copy fetched here.
@@ -11,7 +12,7 @@ $ErrorActionPreference = "Stop"
 $version = 987
 $sha256 = "FFF8DF5D8122B18871C0485FE266873644ED5254C15EDE727BAD1EF5F383951D"
 $url = "https://github.com/cemu-project/cemu_graphic_packs/releases/download/Github$version/graphicPacks$version.zip"
-$packs = @("BreathOfTheWild/Graphics/", "BreathOfTheWild/Mods/FPS++/")
+$packs = @("BreathOfTheWild/")
 
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $Destination) { $Destination = Join-Path $root "bin\resources\pcedition\graphicPacks" }
@@ -54,7 +55,7 @@ finally {
     $archive.Dispose()
 }
 Set-Content -Encoding utf8 (Join-Path $Destination "README.txt") @"
-Cemu community graphic packs v$version (Breath of the Wild: Graphics, FPS++)
+Cemu community graphic packs v$version (Breath of the Wild)
 Source:  https://github.com/cemu-project/cemu_graphic_packs
 License: CC0-1.0
 "@

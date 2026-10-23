@@ -243,6 +243,8 @@ namespace pce
 			int mapCats = (int)s.mapCategories;
 			Get(m, "Map", "Categories", mapCats);
 			s.mapCategories = (uint32)mapCats & 0x7FFu;
+			Get(m, "Mods", "GraphicPacks", s.userGraphicPacks);
+			Get(m, "Mods", "Presets", s.userPackPresets);
 			for (size_t i = 0; i < kActionCount; i++)
 			{
 				std::string v;
@@ -332,6 +334,9 @@ namespace pce
 		o << "DimClaimed=" << b(s.mapDimClaimed) << "\n";
 		o << "MasterMode=" << b(s.mapMasterMode) << "\n";
 		o << "Categories=" << s.mapCategories << "\n\n";
+		o << "[Mods]\n";
+		o << "GraphicPacks=" << s.userGraphicPacks << "\n";
+		o << "Presets=" << s.userPackPresets << "\n\n";
 		o << "[Controls]\n";
 		for (size_t i = 0; i < kActionCount; i++)
 		{

@@ -30,7 +30,7 @@ for region in 3 4 5; do
 done
 cp -r "$bin/resources/sharedFonts" "$stage/resources/sharedFonts"
 cp "$bin/resources/pcedition/External_00.bffnt" "$stage/resources/pcedition/External_00.bffnt"
-unzip -q "$zip" "BreathOfTheWild/Graphics/*" "BreathOfTheWild/Mods/FPS++/*" -d "$stage/resources/pcedition/graphicPacks"
+unzip -q "$zip" "BreathOfTheWild/*" -d "$stage/resources/pcedition/graphicPacks"
 cp "$root/LICENSE.txt" "$stage/LICENSE.txt"
 cp "$root/installer/THIRD-PARTY-NOTICES.txt" "$stage/THIRD-PARTY-NOTICES.txt"
 cp "$root/dependencies/FidelityFX-SDK/LICENSE.txt" "$stage/licenses/FidelityFX-SDK.txt"

@@ -154,6 +154,8 @@ namespace pce
 		bool mapDimClaimed = false;         // when auto-hide is off, dim claimed markers instead of showing at full opacity
 		bool mapMasterMode = false;         // include Master Mode exclusive spawns and chests
 		uint32 mapCategories = 0x001Fu;     // bitmask of enabled categories (default: Shrines, Towers, Koroks, Chests, Bosses)
+		std::string userGraphicPacks; // enabled mods (graphic packs that are not the edition's own): ids separated by ';'
+		std::string userPackPresets;  // presets chosen for the mods: "id|category|preset" entries separated by ';'
 
 		std::array<Binding, kActionCount> bindings;
 

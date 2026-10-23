@@ -93,6 +93,10 @@ the game's tutorial tips show your keys where the game has pictures of the GameP
 - Resolution from 720p to 4K, frame rate limits from 30 to 240 FPS with corrected game speed and physics, shadows,
   anti-aliasing, V-Sync.
 - Audio: volume (applied at once), speakers (mono, stereo, 5.1 surround) and the output device.
+- **Mods:** `Esc` → **Mods** lists the Cemu community graphic packs for the game (Enhancements, Mods, Cheats,
+  Workarounds) and your own (graphic packs in the mods folder, for example exported from BCML, and the ones of your Cemu
+  installation), each with an on / off switch and its presets. Most apply at once; packs that replace textures or game
+  files apply on the next start, and the menu says so.
 - **Aspect ratio:** 16:9, 16:10, 21:9 and 32:9, with the HUD at the edges of the screen or centred on ultrawide. An
   ultrawide main display is detected. New, and so far tried in a window only, not on an ultrawide display.
 - Inventory, map and Adventure Log open directly on their page (`Tab` / `I`, `M`, `J`).
@@ -175,7 +179,7 @@ powershell -ExecutionPolicy Bypass -File tools\package.ps1
 
 - `tools\build.cmd` configures and builds `bin\ZeldaOnPC_release.exe`. The first run builds the dependencies through
   vcpkg and takes a while.
-- `tools\package.ps1` fetches the two community graphic packs the graphics settings build on, stages the files into
+- `tools\package.ps1` fetches the community graphic packs of the game (the graphics settings and the Mods page), stages the files into
   `build\stage` and compiles `installer\output\ZeldaOnPC-Setup-<version>.exe`. `build\stage` is also a complete portable
   copy.
 
@@ -219,7 +223,7 @@ that executable. All three regions use it.
   would not exist without it.
 - [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) for FSR 3 frame generation.
 - The [Cemu graphic pack community](https://github.com/cemu-project/cemu_graphic_packs) for the *Graphics* and *FPS++*
-  packs.
+  packs and all the others on the Mods page.
 
 Licensed under the [Mozilla Public License 2.0](LICENSE.txt), like Cemu. Third-party notices are in
 [installer/THIRD-PARTY-NOTICES.txt](installer/THIRD-PARTY-NOTICES.txt).
