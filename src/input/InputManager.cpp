@@ -53,7 +53,7 @@ InputManager::InputManager()
 
 InputManager::~InputManager()
 {
-	// destructors will not invoked forever, so we manually release resources in Shutdown().
+	Shutdown();
 }
 
 void InputManager::load() noexcept

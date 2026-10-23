@@ -152,6 +152,7 @@ target_include_directories(CemuWxGui PUBLIC "../")
 target_include_directories(CemuWxGui PUBLIC ${RAPIDJSON_INCLUDE_DIRS})
 
 target_link_libraries(CemuWxGui PRIVATE
+  CemuPCEdition
   CemuCommon
   CemuResource
   libzip::zip

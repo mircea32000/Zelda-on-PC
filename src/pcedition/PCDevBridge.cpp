@@ -11,8 +11,20 @@
 #include "pcedition/PCGraphics.h"
 #include "pcedition/PCMapIcons.h"
 
+#ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#else
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#define SOCKET int
+#define INVALID_SOCKET (-1)
+#define SOCKET_ERROR (-1)
+#define closesocket close
+#endif
 #include <sstream>
 #include <map>
 #include <cmath>
@@ -34,6 +46,32 @@ void LatteFrameGen_GetStats(float& baseFps, float& shownFps, bool& generating); 
 void LatteFrameGen_GetPacing(double& meanMs, double& stdMs, double& p95Ms);
 void LatteFrameTrace_Request(const std::string& path);
 std::string LatteFSR_Command(const std::vector<std::string>& a);
+
+#if !BOOST_OS_WINDOWS
+#pragma pack(push, 2)
+struct BITMAPFILEHEADER {
+	uint16 bfType;
+	uint32 bfSize;
+	uint16 bfReserved1;
+	uint16 bfReserved2;
+	uint32 bfOffBits;
+};
+#pragma pack(pop)
+
+struct BITMAPINFOHEADER {
+	uint32 biSize;
+	int32_t biWidth;
+	int32_t biHeight;
+	uint16 biPlanes;
+	uint16 biBitCount;
+	uint32 biCompression;
+	uint32 biSizeImage;
+	int32_t biXPelsPerMeter;
+	int32_t biYPelsPerMeter;
+	uint32 biClrUsed;
+	uint32 biClrImportant;
+};
+#endif
 
 namespace pce::DevBridge
 {
@@ -752,8 +790,10 @@ namespace pce::DevBridge
 
 		void ServerThread()
 		{
+#ifdef _WIN32
 			WSADATA wsa;
 			WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
 			sListen = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 			sockaddr_in addr{};
 			addr.sin_family = AF_INET;

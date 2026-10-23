@@ -7,8 +7,11 @@
 #include "pcedition/PCPrompts.h"
 #include "pcedition/PCIcon.h"
 
+#if BOOST_OS_WINDOWS
 #include <windows.h>
 #include <shlobj.h>
+#endif
+#include <iostream>
 #include <boost/algorithm/string.hpp>
 #include <pugixml.hpp>
 #include <zarchive/zarchivereader.h>
@@ -260,12 +263,19 @@ namespace pce
 
 		fs::path RoamingAppData()
 		{
+#if BOOST_OS_WINDOWS
 			PWSTR path = nullptr;
 			fs::path r;
 			if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &path)))
 				r = path;
 			CoTaskMemFree(path);
 			return r;
+#else
+			const char* home = getenv("HOME");
+			if (home)
+				return fs::path(home) / ".local" / "share";
+			return "/tmp";
+#endif
 		}
 
 		// title id and title version from the contents of a code/app.xml
@@ -480,10 +490,12 @@ namespace pce
 		void CopyTreeIfMissing(const fs::path& src, const fs::path& dst)
 		{
 			std::error_code ec;
-			if (!fs::exists(src, ec) || fs::exists(dst, ec))
+			if (!fs::exists(src, ec))
+				return;
+			if (fs::exists(dst, ec) && fs::is_directory(dst, ec) && !fs::is_empty(dst, ec))
 				return;
 			fs::create_directories(dst.parent_path(), ec);
-			fs::copy(src, dst, fs::copy_options::recursive, ec);
+			fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
 			if (ec)
 				cemuLog_log(LogType::Force, "PCE: failed to copy {} -> {}: {}", _pathToUtf8(src), _pathToUtf8(dst), ec.message());
 			else
@@ -493,11 +505,30 @@ namespace pce
 		// one-time import of the user's existing Cemu save (copy, never move)
 		void ImportExistingSave()
 		{
-			const fs::path cemuMlc = sDevMode ? sExeDir / "data" / "mlc01" : RoamingAppData() / "Cemu" / "mlc01";
+			std::vector<fs::path> candidateMlcs;
+			if (sDevMode)
+				candidateMlcs.push_back(sExeDir / "data" / "mlc01");
+			else
+			{
+				candidateMlcs.push_back(RoamingAppData() / "Cemu" / "mlc01");
+#if !BOOST_OS_WINDOWS
+				const char* home = getenv("HOME");
+				if (home)
+					candidateMlcs.push_back(fs::path(home) / ".var" / "app" / "info.cemu.Cemu" / "data" / "Cemu" / "mlc01");
+#endif
+			}
 			const fs::path mlc = ActiveSettings::GetMlcPath();
 			const std::string save = fmt::format("usr/save/00050000/{:08x}", sRegion ? sRegion : 0x101C9500u);
-			CopyTreeIfMissing(cemuMlc / save, mlc / save);
-			CopyTreeIfMissing(cemuMlc / "usr/save/system/act", mlc / "usr/save/system/act");
+			for (const auto& cemuMlc : candidateMlcs)
+			{
+				std::error_code ec;
+				if (fs::exists(cemuMlc / save, ec))
+				{
+					CopyTreeIfMissing(cemuMlc / save, mlc / save);
+					CopyTreeIfMissing(cemuMlc / "usr/save/system/act", mlc / "usr/save/system/act");
+					break;
+				}
+			}
 		}
 
 		void ForceCemuConfig()
@@ -778,7 +809,29 @@ namespace pce
 
 	void FatalError(const std::string& message)
 	{
+#if BOOST_OS_WINDOWS
 		std::wstring w = boost::nowide::widen(message);
 		MessageBoxW(nullptr, w.c_str(), boost::nowide::widen(kGameTitle).c_str(), MB_OK | MB_ICONERROR);
+#else
+		std::cerr << "\n=======================================================\n"
+		          << "[ZELDA ON PC FATAL ERROR]\n"
+		          << message << "\n"
+		          << "=======================================================\n" << std::endl;
+#endif
+	}
+
+	static void (*sExitCallback)() = nullptr;
+
+	void SetExitCallback(void (*cb)())
+	{
+		sExitCallback = cb;
+	}
+
+	void RequestExit()
+	{
+		if (sExitCallback)
+			sExitCallback();
+		else
+			exit(0);
 	}
 }

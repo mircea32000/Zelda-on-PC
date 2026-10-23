@@ -1,6 +1,36 @@
 #include "pcedition/PCKeys.h"
 
+#if BOOST_OS_WINDOWS
 #include <windows.h>
+#else
+#define VK_CAPITAL 0x14
+#define VK_NUMPAD0 0x60
+#define VK_NUMPAD1 0x61
+#define VK_NUMPAD2 0x62
+#define VK_NUMPAD3 0x63
+#define VK_NUMPAD4 0x64
+#define VK_NUMPAD5 0x65
+#define VK_NUMPAD6 0x66
+#define VK_NUMPAD7 0x67
+#define VK_NUMPAD8 0x68
+#define VK_NUMPAD9 0x69
+#define VK_MULTIPLY 0x6A
+#define VK_ADD 0x6B
+#define VK_SUBTRACT 0x6D
+#define VK_DECIMAL 0x6E
+#define VK_DIVIDE 0x6F
+#define VK_OEM_1 0xBA
+#define VK_OEM_PLUS 0xBB
+#define VK_OEM_COMMA 0xBC
+#define VK_OEM_MINUS 0xBD
+#define VK_OEM_PERIOD 0xBE
+#define VK_OEM_2 0xBF
+#define VK_OEM_3 0xC0
+#define VK_OEM_4 0xDB
+#define VK_OEM_5 0xDC
+#define VK_OEM_6 0xDD
+#define VK_OEM_7 0xDE
+#endif
 #include <boost/algorithm/string.hpp>
 
 namespace pce
@@ -131,6 +161,7 @@ namespace pce
 		const uint16 v = (uint16)k;
 		if (v >= (uint16)Key::F1 && v <= (uint16)Key::F1 + 23)
 			return fmt::format("F{}", v - (uint16)Key::F1 + 1);
+#if BOOST_OS_WINDOWS
 		// layout-aware character for printable keys
 		UINT ch = MapVirtualKeyW(v, MAPVK_VK_TO_CHAR) & 0x7FFF;
 		if (ch >= 0x20)
@@ -142,6 +173,7 @@ namespace pce
 		wchar_t name[64]{};
 		if (sc && GetKeyNameTextW((LONG)(sc << 16), name, 64) > 0)
 			return boost::nowide::narrow(name);
+#endif
 		return KeyToId(k);
 	}
 

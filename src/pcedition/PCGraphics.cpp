@@ -3,8 +3,10 @@
 #include "pcedition/PCEdition.h"
 #include "pcedition/PCSettings.h"
 
+#if BOOST_OS_WINDOWS
 #include <windows.h>
 #include <shlobj.h>
+#endif
 #include <fstream>
 #include <boost/algorithm/string.hpp>
 
@@ -28,10 +30,16 @@ namespace pce::Graphics
 		{
 			std::vector<fs::path> r;
 			r.emplace_back(GetExeDir() / "resources" / "pcedition" / "graphicPacks" / "BreathOfTheWild");
+#if BOOST_OS_WINDOWS
 			PWSTR path = nullptr;
 			if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &path)))
 				r.emplace_back(fs::path(path) / "Cemu" / "graphicPacks" / "downloadedGraphicPacks" / "BreathOfTheWild");
 			CoTaskMemFree(path);
+#else
+			const char* home = getenv("HOME");
+			if (home)
+				r.emplace_back(fs::path(home) / ".local" / "share" / "Cemu" / "graphicPacks" / "downloadedGraphicPacks" / "BreathOfTheWild");
+#endif
 			return r;
 		}
 
@@ -570,7 +578,11 @@ blr
 		if (setting >= 1 && setting <= 4)
 			return setting;
 		// automatic: the shape of the main display
-		const int w = GetSystemMetrics(SM_CXSCREEN), h = GetSystemMetrics(SM_CYSCREEN);
+		int w = 1920, h = 1080;
+#if BOOST_OS_WINDOWS
+		w = GetSystemMetrics(SM_CXSCREEN);
+		h = GetSystemMetrics(SM_CYSCREEN);
+#endif
 		const double ratio = h > 0 ? (double)w / (double)h : 16.0 / 9.0;
 		return ratio > 3.2 ? 4 : (ratio > 2.2 ? 3 : 1); // 32:9 = 3.56, 21:9 = 2.33 - 2.39, 16:9 = 1.78
 	}

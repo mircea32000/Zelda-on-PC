@@ -161,7 +161,7 @@ find_package(zstd MODULE REQUIRED) # MODULE so that zstd::zstd is available
 find_package(OpenSSL COMPONENTS Crypto SSL REQUIRED)
 find_package(glm REQUIRED)
 find_package(fmt 12.1 REQUIRED)
-find_package(PNG REQUIRED)
+find_package(PNG MODULE REQUIRED)
 
 if(ENABLE_SDL)
 	find_package(SDL3 REQUIRED CONFIG REQUIRED COMPONENTS SDL3)

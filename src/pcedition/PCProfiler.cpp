@@ -1,9 +1,13 @@
 #include "pcedition/PCProfiler.h"
 #include "Cafe/HW/MMU/MMU.h"
 
+#if BOOST_OS_WINDOWS
 #include <windows.h>
 #include <tlhelp32.h>
 #include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
+#endif
+
 #include <map>
 #include <unordered_map>
 #include <mutex>
@@ -11,8 +15,6 @@
 #include <atomic>
 #include <fstream>
 #include <algorithm>
-
-#pragma comment(lib, "winmm.lib")
 
 const char* PPCInterpreter_getHLEName(sint32 funcIndex); // PPCInterpreterHLE.cpp
 
@@ -42,6 +44,7 @@ namespace pce::Profiler
 			std::string name;
 		};
 
+#if BOOST_OS_WINDOWS
 		struct Target
 		{
 			std::string name;
@@ -61,6 +64,7 @@ namespace pce::Profiler
 		std::vector<Module> sModules;
 		LARGE_INTEGER sStart{}, sStop{};
 		int sHz = 1000;
+#endif
 
 		bool LookupJit(uintptr_t rip, uint32& block, uint32& func)
 		{
@@ -88,6 +92,7 @@ namespace pce::Profiler
 			return true;
 		}
 
+#if BOOST_OS_WINDOWS
 		void ListModules()
 		{
 			sModules.clear();
@@ -251,6 +256,7 @@ namespace pce::Profiler
 		}
 
 		uint64 FtU64(const FILETIME& ft) { return ((uint64)ft.dwHighDateTime << 32) | ft.dwLowDateTime; }
+#endif
 	}
 
 	void RegisterFunction(const void* hostCode, size_t hostSize, uint32 ppcAddress, std::vector<std::pair<uint32, uint32>>&& segments)
@@ -266,6 +272,7 @@ namespace pce::Profiler
 		sFuncs.erase((uintptr_t)hostCode);
 	}
 
+#if BOOST_OS_WINDOWS
 	bool Running() { return sRun.load(); }
 
 	std::string Start(int hz)
@@ -459,4 +466,10 @@ namespace pce::Profiler
 		CloseHandle(snap);
 		return r.empty() ? "no threads found" : r;
 	}
+#else
+	bool Running() { return false; }
+	std::string Start(int) { return "profiler not supported on Linux"; }
+	std::string Stop(const std::string&, int) { return "profiler not supported on Linux"; }
+	std::string PinEmulationThreads(bool) { return "CPU pinning not supported on Linux"; }
+#endif
 }

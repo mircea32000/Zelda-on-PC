@@ -1,8 +1,20 @@
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanFFX.h"
 
+#if BOOST_OS_WINDOWS
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+#ifndef _WIN32
+#define __declspec(x) __attribute__((visibility("default")))
+#endif
 #include <ffx_api/ffx_api.h>
 #include <ffx_api/ffx_framegeneration.h>
 #include <ffx_api/vk/ffx_api_vk.h>
+#ifndef _WIN32
+#undef __declspec
+#endif
 
 namespace
 {
@@ -69,6 +81,7 @@ bool VulkanFFX::Load()
 	if (m_loadTried)
 		return m_loaded;
 	m_loadTried = true;
+#if BOOST_OS_WINDOWS
 	wchar_t path[MAX_PATH]{};
 	GetModuleFileNameW(nullptr, path, MAX_PATH);
 	std::wstring dir(path);
@@ -85,6 +98,20 @@ bool VulkanFFX::Load()
 	m_fnConfigure = (void*)GetProcAddress(mod, "ffxConfigure");
 	m_fnQuery = (void*)GetProcAddress(mod, "ffxQuery");
 	m_fnDispatch = (void*)GetProcAddress(mod, "ffxDispatch");
+#else
+	void* mod = dlopen("libamd_fidelityfx_vk.so", RTLD_NOW | RTLD_LOCAL);
+	if (!mod)
+	{
+		cemuLog_log(LogType::Force, "FSR: libamd_fidelityfx_vk.so not found, frame generation unavailable");
+		return false;
+	}
+	m_module = mod;
+	m_fnCreate = dlsym(mod, "ffxCreateContext");
+	m_fnDestroy = dlsym(mod, "ffxDestroyContext");
+	m_fnConfigure = dlsym(mod, "ffxConfigure");
+	m_fnQuery = dlsym(mod, "ffxQuery");
+	m_fnDispatch = dlsym(mod, "ffxDispatch");
+#endif
 	m_loaded = m_fnCreate && m_fnDestroy && m_fnConfigure && m_fnQuery && m_fnDispatch;
 	cemuLog_log(LogType::Force, "FSR: amd_fidelityfx_vk.dll {}", m_loaded ? "loaded" : "is missing exports");
 	return m_loaded;

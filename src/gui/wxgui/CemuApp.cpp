@@ -134,6 +134,11 @@ void CemuApp::DeterminePaths(std::set<fs::path>& failedWriteAccess) // for Windo
 #if BOOST_OS_LINUX || BOOST_OS_BSD
 void CemuApp::DeterminePaths(std::set<fs::path>& failedWriteAccess) // for Linux
 {
+	if (pce::IsActive())
+	{
+		pce::DeterminePaths(wxHelper::MakeFSPath(wxStandardPaths::Get().GetExecutablePath()), failedWriteAccess);
+		return;
+	}
 	std::error_code ec;
 	bool isPortable = false;
 	fs::path user_data_path, config_path, cache_path, data_path;
@@ -379,7 +384,7 @@ bool CemuApp::OnInit()
 										"image with the extension .key) next to the image, or add the key as a line of 32 hex digits to "
 										"data\\keys.txt next to the executable. A keys.txt of a Cemu installation is read as well.",
 										_pathToUtf8(pce::GetDiscImageWithoutKey())));
-			exit(0);
+			_Exit(1);
 		}
 		if (!pce::IsGameAvailable())
 		{
@@ -387,7 +392,7 @@ bool CemuApp::OnInit()
 							"Run the installer again and select the folder that holds your game dump (base game, update 1.5.0 and DLC, as "
 							"folders with code / content / meta, as a .wua archive, or the base game as a .wud / .wux disc image), or set it in settings.ini next to the "
 							"executable:\n\n[Game]\nPath=...");
-			exit(0);
+			_Exit(1);
 		}
 		if (pce::GetUpdateVersion() != pce::kRequiredUpdateVersion)
 		{
@@ -397,7 +402,7 @@ bool CemuApp::OnInit()
 								: fmt::format("Game update version {} was found, but version 1.5.0 (v{}) is required.\n\nDump the latest update "
 											  "from your console and start again.",
 											  pce::GetUpdateVersion(), pce::kRequiredUpdateVersion));
-			exit(0);
+			_Exit(1);
 		}
 	}
 
@@ -434,7 +439,16 @@ bool CemuApp::OnInit()
 	g_window_info.app_active = true;
 
 	if (pce::IsActive())
+	{
+#if BOOST_OS_WINDOWS
 		pce::InitAfterWindow(m_mainFrame->GetHWND());
+#else
+		pce::InitAfterWindow(m_mainFrame->GetHandle());
+#endif
+		pce::SetExitCallback([]() {
+			wxTheApp->GetTopWindow()->Close(true);
+		});
+	}
 	else
 		HotkeySettings::Init(m_mainFrame);
 

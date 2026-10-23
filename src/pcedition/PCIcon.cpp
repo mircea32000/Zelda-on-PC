@@ -1,6 +1,8 @@
 #include "pcedition/PCIcon.h"
 
+#if BOOST_OS_WINDOWS
 #include <windows.h>
+#endif
 #include <fstream>
 
 namespace pce::Icon
@@ -205,6 +207,7 @@ namespace pce::Icon
 
 	bool ApplyToWindow(void* hwnd, const fs::path& icoPath)
 	{
+#if BOOST_OS_WINDOWS
 		std::error_code ec;
 		if (!hwnd || !fs::exists(icoPath, ec))
 			return false;
@@ -216,5 +219,10 @@ namespace pce::Icon
 		SendMessageW((HWND)hwnd, WM_SETICON, ICON_BIG, (LPARAM)big);
 		SendMessageW((HWND)hwnd, WM_SETICON, ICON_SMALL, (LPARAM)small);
 		return true;
+#else
+		(void)hwnd;
+		(void)icoPath;
+		return false;
+#endif
 	}
 }

@@ -62,6 +62,7 @@ bin/resources/pcedition/graphicPacks/
 bin/data/
 bin/data_dev/
 bin/settings.ini
+bin/ZeldaOnPC_*
 bin/*.exe
 bin/*.dll
 bin/*.pdb

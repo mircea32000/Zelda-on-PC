@@ -9,11 +9,13 @@
 #include "pcedition/PCPrompts.h"
 #include "pcedition/PCMapIcons.h"
 
+#if BOOST_OS_WINDOWS
 #include <windows.h>
 #include <commdlg.h>
 #include <shellapi.h>
-#include <mutex>
 #pragma comment(lib, "comdlg32.lib")
+#endif
+#include <mutex>
 #include <fstream>
 #include <thread>
 
@@ -161,7 +163,12 @@ namespace pce::Overlay
 
 		double Now()
 		{
+#if BOOST_OS_WINDOWS
 			return (double)GetTickCount64() / 1000.0;
+#else
+			using namespace std::chrono;
+			return duration_cast<duration<double>>(steady_clock::now().time_since_epoch()).count();
+#endif
 		}
 
 		void Toast(const std::string& t)
@@ -221,9 +228,12 @@ namespace pce::Overlay
 			std::sort(sAmiiboFiles.begin(), sAmiiboFiles.end());
 		}
 
+		void OpenAmiiboFolder();
+
 		// Windows' file dialog on a thread of its own (the game keeps running); the chosen file is copied into the folder
 		void AddAmiiboFile()
 		{
+#if BOOST_OS_WINDOWS
 			if (sAmiiboDialog.exchange(true))
 				return;
 			HWND owner = (HWND)WindowSystem::GetWindowInfo().window_main.surface;
@@ -251,13 +261,22 @@ namespace pce::Overlay
 				}
 				sAmiiboDialog = false;
 			}).detach();
+#else
+			OpenAmiiboFolder();
+#endif
 		}
 
 		void OpenAmiiboFolder()
 		{
 			std::error_code ec;
 			fs::create_directories(AmiiboDir(), ec);
+#if BOOST_OS_WINDOWS
 			ShellExecuteW(nullptr, L"open", AmiiboDir().wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#else
+			std::string cmd = "xdg-open \"" + AmiiboDir().string() + "\" &";
+			int ret = system(cmd.c_str());
+			(void)ret;
+#endif
 		}
 
 		std::vector<Page> BuildPages(bool embedded = false)
@@ -740,10 +759,29 @@ namespace pce::Overlay
 		sFonts.small = io.Fonts->AddFontFromMemoryTTF(sFontData.data(), (int)sFontData.size(), (float)fh * 0.72f, &cfg, ranges);
 		if (sKeyFontData.empty())
 		{
+#if BOOST_OS_WINDOWS
 			wchar_t windir[MAX_PATH]{};
 			GetWindowsDirectoryW(windir, MAX_PATH);
 			std::ifstream kf(fs::path(windir) / "Fonts" / "segoeuib.ttf", std::ios::binary);
 			sKeyFontData.assign(std::istreambuf_iterator<char>(kf), {});
+#else
+			const char* linuxFontPaths[] = {
+				"/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
+				"/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+				"/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+				"/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf",
+				"/usr/share/fonts/google-noto/NotoSans-Bold.ttf"
+			};
+			for (const char* fpath : linuxFontPaths)
+			{
+				std::ifstream kf(fpath, std::ios::binary);
+				if (kf.good())
+				{
+					sKeyFontData.assign(std::istreambuf_iterator<char>(kf), {});
+					break;
+				}
+			}
+#endif
 		}
 		static const ImWchar keyRanges[] = {0x0020, 0x007E, 0};
 		sFonts.key = sKeyFontData.empty() ? sFonts.item
@@ -1028,7 +1066,13 @@ namespace pce::Overlay
 			if (sConfirmQuit)
 			{
 				if (k == Key::Enter || k == KeyChar('Y'))
+				{
+#if BOOST_OS_WINDOWS
 					PostMessageW((HWND)WindowSystem::GetWindowInfo().window_main.surface, WM_CLOSE, 0, 0);
+#else
+					pce::RequestExit();
+#endif
+				}
 				sConfirmQuit = false;
 				return false;
 			}

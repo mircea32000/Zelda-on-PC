@@ -69,4 +69,6 @@ namespace pce
 
 	// fatal startup error shown in a minimal native message box (only used if the game cannot start at all)
 	void FatalError(const std::string& message);
+	void RequestExit();
+	void SetExitCallback(void (*cb)());
 }

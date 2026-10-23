@@ -1580,6 +1580,13 @@ namespace pce::MapIcons
 			});
 		}
 
+#ifndef VK_OEM_MINUS
+#define VK_OEM_MINUS 0xBD
+#endif
+#ifndef VK_OEM_7
+#define VK_OEM_7 0xDE
+#endif
+
 		char KeyToSearchChar(Key k, bool shift)
 		{
 			const uint16 v = (uint16)k;

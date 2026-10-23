@@ -6,8 +6,30 @@
 #include "pcedition/PCMenus.h"
 #include "pcedition/PCOverlay.h"
 #include "pcedition/PCGraphics.h"
+#include "util/highresolutiontimer/HighResolutionTimer.h"
 
+#if BOOST_OS_WINDOWS
 #include <windows.h>
+#else
+#include <chrono>
+#define VK_LBUTTON 0x01
+#define VK_RBUTTON 0x02
+#define VK_MBUTTON 0x04
+#define VK_XBUTTON1 0x05
+#define VK_XBUTTON2 0x06
+#define VK_SHIFT 0x10
+#define VK_CONTROL 0x11
+#define VK_MENU 0x12
+#define VK_LSHIFT 0xA0
+#define VK_RSHIFT 0xA1
+#define VK_LCONTROL 0xA2
+#define VK_RCONTROL 0xA3
+#define VK_LMENU 0xA4
+#define VK_RMENU 0xA5
+#define WHEEL_DELTA 120
+using HWND = void*;
+using DWORD = uint32;
+#endif
 #include <deque>
 #include <thread>
 
@@ -99,15 +121,25 @@ namespace pce::Input
 
 		sint64 QpcNow()
 		{
+#if BOOST_OS_WINDOWS
 			LARGE_INTEGER li;
 			QueryPerformanceCounter(&li);
 			return li.QuadPart;
+#else
+			return (sint64)std::chrono::steady_clock::now().time_since_epoch().count();
+#endif
 		}
 
 		double QpcFreq()
 		{
+#if BOOST_OS_WINDOWS
 			static double f = []() { LARGE_INTEGER li; QueryPerformanceFrequency(&li); return (double)li.QuadPart; }();
 			return f;
+#else
+			using Period = std::chrono::steady_clock::period;
+			static double f = (double)Period::den / (double)Period::num;
+			return f;
+#endif
 		}
 
 		void ReleaseAllKeys()
@@ -151,8 +183,12 @@ namespace pce::Input
 				PushPress((Key)vk);
 		}
 
+		std::atomic<float> sClientMouseX{-1.0f}, sClientMouseY{-1.0f};
+		std::atomic<float> sClientW{1920.0f}, sClientH{1080.0f};
+
 		void LogFocusChange(bool focused)
 		{
+#if BOOST_OS_WINDOWS
 			HWND fg = GetForegroundWindow();
 			wchar_t cls[128]{}, title[128]{};
 			if (fg)
@@ -165,10 +201,14 @@ namespace pce::Input
 				GetWindowThreadProcessId(fg, &pid);
 			cemuLog_log(LogType::Force, "PCE input: focus {} (foreground hwnd={:x} pid={} class='{}' title='{}')", focused ? "gained" : "lost",
 						(uintptr_t)fg, pid, boost::nowide::narrow(cls), boost::nowide::narrow(title));
+#else
+			cemuLog_log(LogType::Force, "PCE input: focus {}", focused ? "gained" : "lost");
+#endif
 		}
 
 		bool ComputeFocus()
 		{
+#if BOOST_OS_WINDOWS
 			HWND main = sMainWnd.load();
 			if (!main)
 				return false;
@@ -176,8 +216,12 @@ namespace pce::Input
 			if (!fg)
 				return false;
 			return fg == main || IsChild(main, fg) || GetAncestor(fg, GA_ROOTOWNER) == main;
+#else
+			return sFocused.load() || sDebug.forceFocus.load();
+#endif
 		}
 
+#if BOOST_OS_WINDOWS
 		void HandleRawInput(HRAWINPUT hri)
 		{
 			alignas(8) BYTE buffer[256];
@@ -303,6 +347,23 @@ namespace pce::Input
 			DestroyWindow(hwnd);
 			sMsgWnd = nullptr;
 		}
+#else
+		void InputThread()
+		{
+			while (!sQuit.load())
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(20));
+				const bool focused = ComputeFocus();
+				if (focused != sFocused.load())
+				{
+					sFocused = focused;
+					LogFocusChange(focused);
+					if (!focused)
+						ReleaseAllKeys();
+				}
+			}
+		}
+#endif
 
 		// Position in the client area of the game window -> position in the game's picture (0 - 1). The picture keeps
 		// its shape: in a window of another shape (16:10 display, 16:9 picture on an ultrawide display, ...) it has bars,
@@ -1149,14 +1210,56 @@ namespace pce::Input
 		if (!sThread.joinable())
 			return;
 		sQuit = true;
+#if BOOST_OS_WINDOWS
 		if (DWORD tid = sThreadId.load())
 			PostThreadMessageW(tid, WM_QUIT, 0, 0);
+#endif
 		sThread.join();
 	}
 
 	void SetMainWindow(void* hwnd)
 	{
 		sMainWnd = (HWND)hwnd;
+#if !BOOST_OS_WINDOWS
+		sFocused = true;
+#endif
+	}
+
+	void SetWindowFocus(bool focused)
+	{
+		sFocused = focused;
+	}
+
+	void SetClientMousePos(float x, float y, float clientW, float clientH)
+	{
+		sClientMouseX = x;
+		sClientMouseY = y;
+		sClientW = clientW;
+		sClientH = clientH;
+	}
+
+	void HandleMouseMove(sint32 dx, sint32 dy)
+	{
+		if (dx == 0 && dy == 0)
+			return;
+		if (!sOverlayOpen.load() && !sEmbedFocus.load() && !sPopupOpen.load())
+		{
+			std::lock_guard lock(sMouseMutex);
+			const sint64 t = QpcNow();
+			sMouseSamples.push_back({t, dx, dy});
+			if (sMouseSamples.size() > 20000)
+				sMouseSamples.pop_front();
+		}
+	}
+
+	void HandleKey(uint16 vk, bool down)
+	{
+		SetKey(vk, down);
+	}
+
+	void HandleWheel(sint32 delta)
+	{
+		OnWheel(delta);
 	}
 
 	bool IsGameWindowFocused()
@@ -1477,6 +1580,7 @@ namespace pce::Input
 		Menus::FrameIO mio;
 		mio.frame = frameNo;
 		mio.focused = inputEnabled;
+#if BOOST_OS_WINDOWS
 		if (HWND main = sMainWnd.load())
 		{
 			POINT pt;
@@ -1484,6 +1588,12 @@ namespace pce::Input
 			if (GetCursorPos(&pt) && ScreenToClient(main, &pt) && GetClientRect(main, &rc) && rc.right > 0 && rc.bottom > 0)
 				MapToPicture((float)pt.x, (float)pt.y, (float)rc.right, (float)rc.bottom, mio.mouseX, mio.mouseY, mio.mouseInside);
 		}
+#else
+		if (sClientMouseX.load() >= 0 && sClientW.load() > 0 && sClientH.load() > 0)
+		{
+			MapToPicture(sClientMouseX.load(), sClientMouseY.load(), sClientW.load(), sClientH.load(), mio.mouseX, mio.mouseY, mio.mouseInside);
+		}
+#endif
 		if (sDebug.overrideMouse.load())
 		{
 			mio.mouseX = sDebug.overrideMouseX.load();
@@ -2246,9 +2356,7 @@ namespace pce::Input
 		// latency probe (dev bridge): time of the first VPAD read that turns the camera
 		if (g_pceProbeArmed.load() && g_pceProbeInputTick.load() == 0 && std::fabs(rx) > 0.5f)
 		{
-			LARGE_INTEGER q;
-			QueryPerformanceCounter(&q);
-			g_pceProbeInputTick = (uint64)q.QuadPart;
+			g_pceProbeInputTick = (uint64)HighResolutionTimer::now().getTick();
 		}
 		sDebug.lastStickRX = rx;
 		sDebug.lastStickRY = ry;

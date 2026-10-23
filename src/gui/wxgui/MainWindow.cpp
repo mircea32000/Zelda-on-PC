@@ -476,7 +476,9 @@ void MainWindow::OnClose(wxCloseEvent& event)
 	if (pce::IsActive())
 	{
 		pce::Overlay::ReleaseForShutdown();
+#if BOOST_OS_WINDOWS
 		ClipCursor(nullptr);
+#endif
 		ShowCursor(true);
 		Hide();
 	}
@@ -1309,6 +1311,7 @@ void MainWindow::OnDebugViewTextureRelations(wxCommandEvent& event)
 
 void MainWindow::UpdatePCECursor()
 {
+#if BOOST_OS_WINDOWS
 	// The OS cursor is pinned to a 2x2 px area in the middle of the game window while playing: it can never wander
 	// to another monitor or hover anything, and Raw Input still delivers the full mouse motion.
 	// Re-applied on every tick because Windows resets cursor clipping on several occasions.
@@ -1362,6 +1365,20 @@ void MainWindow::UpdatePCECursor()
 		ShowCursor(true);
 		m_pce_cursor_captured = false;
 	}
+#else
+	const bool foreground = IsActive();
+	const bool capture = m_game_launched && foreground && pce::Input::WantsCursorCaptured();
+	if (capture)
+	{
+		SetCursor(wxCursor(wxCURSOR_BLANK));
+		m_pce_cursor_captured = true;
+	}
+	else if (m_pce_cursor_captured)
+	{
+		SetCursor(wxNullCursor);
+		m_pce_cursor_captured = false;
+	}
+#endif
 }
 
 void MainWindow::ShowCursor(bool state)
@@ -1526,6 +1543,35 @@ void MainWindow::OnMouseMove(wxMouseEvent& event)
 	if (!pce::IsActive())
 		ShowCursor(true);
 
+#if !BOOST_OS_WINDOWS
+	if (pce::IsActive())
+	{
+		static wxPoint sLastPos = event.GetPosition();
+		wxSize sz = GetClientSize();
+		pce::Input::SetClientMousePos((float)event.GetPosition().x, (float)event.GetPosition().y, (float)sz.GetWidth(), (float)sz.GetHeight());
+		if (m_pce_cursor_captured)
+		{
+			sint32 dx = event.GetPosition().x - sLastPos.x;
+			sint32 dy = event.GetPosition().y - sLastPos.y;
+			pce::Input::HandleMouseMove(dx, dy);
+			wxPoint center(sz.GetWidth() / 2, sz.GetHeight() / 2);
+			if (std::abs(event.GetPosition().x - center.x) > 200 || std::abs(event.GetPosition().y - center.y) > 200)
+			{
+				WarpPointer(center.x, center.y);
+				sLastPos = center;
+			}
+			else
+			{
+				sLastPos = event.GetPosition();
+			}
+		}
+		else
+		{
+			sLastPos = event.GetPosition();
+		}
+	}
+#endif
+
 	auto& instance = InputManager::instance();
 	std::unique_lock lock(instance.m_main_mouse.m_mutex);
 	auto physPos = ToPhys(event.GetPosition());
@@ -1543,6 +1589,10 @@ void MainWindow::OnMouseMove(wxMouseEvent& event)
 
 void MainWindow::OnMouseLeft(wxMouseEvent& event)
 {
+#if !BOOST_OS_WINDOWS
+	if (pce::IsActive())
+		pce::Input::HandleKey(0x01 /* VK_LBUTTON */, event.LeftIsDown());
+#endif
 	auto& instance = InputManager::instance();
 
 	std::scoped_lock lock(instance.m_main_mouse.m_mutex);
@@ -1557,6 +1607,10 @@ void MainWindow::OnMouseLeft(wxMouseEvent& event)
 
 void MainWindow::OnMouseRight(wxMouseEvent& event)
 {
+#if !BOOST_OS_WINDOWS
+	if (pce::IsActive())
+		pce::Input::HandleKey(0x02 /* VK_RBUTTON */, event.RightIsDown());
+#endif
 	auto& instance = InputManager::instance();
 
 	std::scoped_lock lock(instance.m_main_mouse.m_mutex);
@@ -1595,9 +1649,57 @@ void MainWindow::OnSetWindowTitle(wxCommandEvent& event)
 	this->SetTitle(event.GetString());
 }
 
+#if !BOOST_OS_WINDOWS
+static uint16 WxKeyToVK(int wxk)
+{
+	if (wxk >= 'A' && wxk <= 'Z') return (uint16)wxk;
+	if (wxk >= 'a' && wxk <= 'z') return (uint16)(wxk - 'a' + 'A');
+	if (wxk >= '0' && wxk <= '9') return (uint16)wxk;
+	switch (wxk)
+	{
+	case WXK_ESCAPE: return 0x1B;
+	case WXK_SPACE: return 0x20;
+	case WXK_TAB: return 0x09;
+	case WXK_BACK: return 0x08;
+	case WXK_RETURN: return 0x0D;
+	case WXK_SHIFT: return 0x10;
+	case WXK_CONTROL: return 0x11;
+	case WXK_ALT: return 0x12;
+	case WXK_LEFT: return 0x25;
+	case WXK_UP: return 0x26;
+	case WXK_RIGHT: return 0x27;
+	case WXK_DOWN: return 0x28;
+	case WXK_PAGEUP: return 0x21;
+	case WXK_PAGEDOWN: return 0x22;
+	case WXK_END: return 0x23;
+	case WXK_HOME: return 0x24;
+	case WXK_INSERT: return 0x2D;
+	case WXK_DELETE: return 0x2E;
+	case WXK_F1: return 0x70;
+	case WXK_F2: return 0x71;
+	case WXK_F3: return 0x72;
+	case WXK_F4: return 0x73;
+	case WXK_F5: return 0x74;
+	case WXK_F6: return 0x75;
+	case WXK_F7: return 0x76;
+	case WXK_F8: return 0x77;
+	case WXK_F9: return 0x78;
+	case WXK_F10: return 0x79;
+	case WXK_F11: return 0x7A;
+	case WXK_F12: return 0x7B;
+	default: return (uint16)(wxk & 0xFF);
+	}
+}
+#endif
+
 void MainWindow::OnKeyUp(wxKeyEvent& event)
 {
 	event.Skip();
+
+#if !BOOST_OS_WINDOWS
+	if (pce::IsActive())
+		pce::Input::HandleKey(WxKeyToVK(event.GetKeyCode()), false);
+#endif
 
 	if (swkbd_hasKeyboardInputHook())
 		return;
@@ -1625,6 +1727,10 @@ void MainWindow::OnPCECharHook(wxKeyEvent& event)
 
 void MainWindow::OnKeyDown(wxKeyEvent& event)
 {
+#if !BOOST_OS_WINDOWS
+	if (pce::IsActive())
+		pce::Input::HandleKey(WxKeyToVK(event.GetKeyCode()), true);
+#endif
 #if defined(__APPLE__)
        // On macOS, allow Cmd+Q to quit the application
     if (event.CmdDown() && event.GetKeyCode() == 'Q')
@@ -1897,6 +2003,10 @@ void MainWindow::OnMemorySearcherClose(wxCloseEvent& event)
 void MainWindow::OnMouseWheel(wxMouseEvent& event)
 {
 	const float delta = event.GetWheelRotation(); // in 120 steps -> max reached ~480 (?)
+#if !BOOST_OS_WINDOWS
+	if (pce::IsActive())
+		pce::Input::HandleWheel((sint32)delta);
+#endif
 	auto& instance = InputManager::instance();
 	instance.m_mouse_wheel = (delta / 120.0f);
 
@@ -1910,7 +2020,9 @@ void MainWindow::SetFullScreen(bool state)
 		g_window_info.is_fullscreen = state;
 		if (m_fullscreenMenuItem)
 			m_fullscreenMenuItem->Check(state);
+#if BOOST_OS_WINDOWS
 		const bool wasVisible = ::IsWindowVisible(GetHWND()) != FALSE;
+#endif
 		this->ShowFullScreen(state, wxFULLSCREEN_ALL);
 		m_menu_visible = false;
 		if (!state)
@@ -1919,6 +2031,7 @@ void MainWindow::SetFullScreen(bool state)
 			wxRect desk = GetDesktopRect();
 			SetClientSize(desk.GetWidth() * 4 / 5, desk.GetHeight() * 4 / 5);
 			Centre();
+#if BOOST_OS_WINDOWS
 			// Leaving full screen restores the window style saved when it entered it. With the game started in full
 			// screen that was before the window was first shown: the restored style is a hidden window, and only the
 			// last picture stays on the desktop as a grey rectangle. Show it again.
@@ -1928,6 +2041,10 @@ void MainWindow::SetFullScreen(bool state)
 				Show(true);
 				Raise();
 			}
+#else
+			Show(true);
+			Raise();
+#endif
 		}
 		return;
 	}

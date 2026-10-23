@@ -213,15 +213,15 @@ if(ENABLE_SDL)
 endif()
 
 target_link_libraries(CemuBin PRIVATE
-	CemuPCEdition
+	CemuGui
 	CemuAudio
 	CemuCafe
 	CemuCommon
 	CemuComponents
 	CemuConfig
-	CemuGui
 	CemuInput
 	CemuUtil
+	CemuPCEdition
 )
 
 if(UNIX AND NOT APPLE)

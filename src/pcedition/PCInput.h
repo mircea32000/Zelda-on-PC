@@ -24,6 +24,11 @@ namespace pce
 		// set by the window system so we can test focus
 		void SetMainWindow(void* hwnd);
 		bool IsGameWindowFocused();
+		void SetWindowFocus(bool focused);
+		void SetClientMousePos(float x, float y, float clientW, float clientH);
+		void HandleMouseMove(sint32 dx, sint32 dy);
+		void HandleKey(uint16 vk, bool down);
+		void HandleWheel(sint32 delta);
 
 		// called from VPADRead (emulated CPU thread) once per game frame
 		void FillVPAD(VPADStatus& status);

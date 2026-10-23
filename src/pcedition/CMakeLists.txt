@@ -43,5 +43,10 @@ target_link_libraries(CemuPCEdition PRIVATE
 	pugixml::pugixml
 	ZArchive::zarchive
 	Boost::headers
-	ws2_32
 )
+
+if (WIN32)
+	target_link_libraries(CemuPCEdition PRIVATE ws2_32)
+else()
+	target_link_libraries(CemuPCEdition PRIVATE ${CMAKE_DL_LIBS})
+endif()
