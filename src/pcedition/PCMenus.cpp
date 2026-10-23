@@ -92,6 +92,7 @@ namespace pce::Menus
 		// inventory: the mouse wheel turns one page per notch with the game's slide (eased, not snapped); notches queue
 		// up and each page starts once the previous slide has ended
 		int sWheelPages = 0;
+		int sPagerWheel = 0; // shops and other screens with category tabs: pages still to turn for the wheel
 		uint32 sWheelNextAt = 0;
 		uint32 sSmoothUntil = 0;
 		std::atomic<bool> sSmoothSlide{false};
@@ -462,6 +463,7 @@ namespace pce::Menus
 			sInvJump = -1;
 			sInvJumpPages = 0;
 			sWheelPages = 0;
+			sPagerWheel = 0;
 			sSmoothSlide = false;
 			sHoverChase = false;
 			sHoverDonePart = 0;
@@ -515,6 +517,7 @@ namespace pce::Menus
 					if (ps.currentTab >= 0)
 					{
 						sWheelPages = 0;
+						sPagerWheel = 0;
 						sSmoothSlide = false;
 						if (st.inventory && !ps.questTabs)
 							JumpTab(ps.targets[hover].tab, io.frame);
@@ -559,11 +562,17 @@ namespace pce::Menus
 					if (sTabTarget < 0)
 						sWheelPages = std::clamp(sWheelPages + (io.wheel > 0 ? -1 : 1) * std::abs(io.wheel), -12, 12);
 				}
-				else if (ps.tabCount > 0 && ps.currentTab >= 0 && overTabs)
+				else if (ps.tabCount > 0 && ps.currentTab >= 0 && overTabs && ps.questTabs)
 				{
 					// adventure log: the wheel flips through the categories
 					const int base = sTabTarget >= 0 ? sTabTarget : ps.currentTab;
 					RequestTab(std::clamp(base + (io.wheel > 0 ? -1 : 1) * std::min(3, std::abs(io.wheel)), 0, ps.tabCount - 1), ps.currentTab, io.frame);
+				}
+				else if (ps.tabCount > 0 && ps.currentTab >= 0 && overTabs)
+				{
+					// shops and other screens with category tabs (their pages turn at once): one page per notch, queued
+					if (sTabTarget < 0)
+						sPagerWheel = std::clamp(sPagerWheel + (io.wheel > 0 ? -1 : 1) * std::abs(io.wheel), -12, 12);
 				}
 				else if (!sNav.Busy())
 					sNav.Start(io.wheel > 0 ? kUp : kDown, 2, 3);
@@ -576,6 +585,13 @@ namespace pce::Menus
 			sTabSteps = d;
 			sTabPhase = 0;
 			sSmoothUntil = io.frame + 30;
+		}
+		// shops and other screens with category tabs: one flick per queued wheel notch
+		if (sPagerWheel != 0 && sTabSteps == 0 && sTabTarget < 0)
+		{
+			const int dir = sPagerWheel > 0 ? 1 : -1;
+			sTabSteps = dir;
+			sPagerWheel -= dir;
 		}
 		// wheel pages, once the previous slide has ended: one notch slides one page; several notches waiting jump over the
 		// pages in between and only the last one slides in (no catching up page by page). These slides follow the Inventory
@@ -615,7 +631,8 @@ namespace pce::Menus
 			{
 				sTabPhase = 0;
 				sTabSteps -= dir;
-				sTabVerifyAt = io.frame + (sSmoothSlide.load() ? 30 : kTabCheckFrames); // a sliding page turn: check once it ended
+				// a sliding page turn: check once it ended; shops and the other screens show the new category at once
+				sTabVerifyAt = io.frame + (sSmoothSlide.load() ? 30 : (st.inventory ? kTabCheckFrames : 1));
 			}
 		}
 		else if (sTabTarget >= 0 && io.frame >= sTabVerifyAt && !InventorySliding())

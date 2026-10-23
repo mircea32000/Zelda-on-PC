@@ -1,0 +1,51 @@
+name: Linux build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build nasm clang curl zip unzip pkg-config autoconf automake autoconf-archive libtool \
+            libgtk-3-dev libsecret-1-dev libgcrypt20-dev libsystemd-dev libudev-dev libbluetooth-dev libpulse-dev freeglut3-dev \
+            libglm-dev libusb-1.0-0-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev libwayland-dev wayland-protocols libegl1-mesa-dev libdrm-dev libgbm-dev
+
+      - name: vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg
+          key: vcpkg-ubuntu-24.04-${{ hashFiles('vcpkg.json', 'dependencies/vcpkg_overlay_ports*/**') }}-${{ github.run_id }}
+          restore-keys: vcpkg-ubuntu-24.04-${{ hashFiles('vcpkg.json', 'dependencies/vcpkg_overlay_ports*/**') }}-
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Package
+        run: |
+          version="$(grep -oP 'kEditionVersion = "v\K[0-9.]+' src/pcedition/PCEdition.h)"
+          bash tools/package_linux.sh "$version"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZeldaOnPC-${{ env.VERSION }}-linux-x86_64
+          path: build/ZeldaOnPC-${{ env.VERSION }}-linux-x86_64.tar.gz
+          if-no-files-found: error
