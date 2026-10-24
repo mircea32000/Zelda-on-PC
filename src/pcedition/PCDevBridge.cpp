@@ -1,5 +1,6 @@
 #include "Cafe/OS/libs/nn_nfp/nn_nfp.h"
 #include "Cafe/OS/libs/nfc/nfc.h"
+#include "Cafe/OS/libs/swkbd/swkbd.h"
 #include "config/CemuConfig.h"
 #include "pcedition/PCDevBridge.h"
 #include "pcedition/PCInput.h"
@@ -729,6 +730,11 @@ namespace pce::DevBridge
 						dbg.overrideTiltYaw = a.size() >= 4 ? f(3) : 0.0f;
 					}
 					return "ok";
+				}
+				if (c == "swkbd")
+				{
+					// swkbd 1 | 0 | -1: the system keyboard's input form shown / hidden / state and text
+					return swkbd_debugForm(a.size() > 1 ? (int)std::stoi(a[1]) : -1);
 				}
 				if (c == "motion")
 					return Input::MotionInfo();

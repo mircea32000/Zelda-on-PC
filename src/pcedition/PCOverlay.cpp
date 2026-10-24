@@ -36,6 +36,7 @@ extern char** environ;
 #include "Cafe/OS/libs/nn_nfp/nn_nfp.h"
 #include "audio/IAudioAPI.h"
 #include "config/CemuConfig.h"
+#include "Cafe/OS/libs/swkbd/swkbd.h"
 
 void LatteFrameGen_GetStats(float& baseFps, float& shownFps, bool& generating); // LatteRenderTarget.cpp
 
@@ -1994,7 +1995,8 @@ namespace pce::Overlay
 			std::optional<Key> k;
 			while ((k = Input::PopKeyPress()))
 			{
-				if (IsSettingsKey(*k) && !Input::GameMenuOpen())
+				// (not while the software keyboard is up: Esc there must not open the pause menu under it)
+				if (IsSettingsKey(*k) && !Input::GameMenuOpen() && !swkbd_hasKeyboardInputHook())
 				{
 					Input::RequestSystemMenu();
 					break;

@@ -40,6 +40,7 @@ using DWORD = uint32;
 #include "Cafe/HW/MMU/MMU.h"
 #include "input/motion/MotionHandler.h"
 #include "util/math/quaternion.h"
+#include "Cafe/OS/libs/swkbd/swkbd.h"
 
 std::atomic<bool> g_pceProbeArmed{false};   // latency probe (LatteRenderTarget.cpp reads it)
 std::atomic<uint64> g_pceProbeInputTick{0};
@@ -167,7 +168,7 @@ namespace pce::Input
 			sWheelRemainder -= notches * WHEEL_DELTA;
 			if (notches == 0)
 				return;
-			if (!sOverlayOpen.load() && !sEmbedFocus.load() && !sPanelHover.load() && !sPopupOpen.load())
+			if (!sOverlayOpen.load() && !sEmbedFocus.load() && !sPanelHover.load() && !sPopupOpen.load() && !swkbd_hasKeyboardInputHook())
 				sWheelGame += notches; // (the game is paused under the PC menu: what is scrolled there is not for it)
 			sWheelOverlay += notches;
 			for (sint32 i = 0; i < std::abs(notches); i++)
@@ -243,7 +244,7 @@ namespace pce::Input
 			{
 				const RAWMOUSE& m = ri->data.mouse;
 				if ((m.usFlags & MOUSE_MOVE_ABSOLUTE) == 0 && (m.lLastX != 0 || m.lLastY != 0) && !sOverlayOpen.load() && !sEmbedFocus.load() &&
-					!sPopupOpen.load())
+					!sPopupOpen.load() && !swkbd_hasKeyboardInputHook())
 				{
 					std::lock_guard lock(sMouseMutex);
 					const sint64 t = QpcNow();
@@ -1516,7 +1517,8 @@ namespace pce::Input
 
 	bool WantsCursorCaptured()
 	{
-		return sFocused.load() && !sOverlayOpen.load() && !sPointerMode.load() && !sPopupOpen.load();
+		// (the system's software keyboard, naming the horse: its keys are clicked with the pointer)
+		return sFocused.load() && !sOverlayOpen.load() && !sPointerMode.load() && !sPopupOpen.load() && !swkbd_hasKeyboardInputHook();
 	}
 
 	SystemPanel GetSystemPanel()
@@ -1751,10 +1753,23 @@ namespace pce::Input
 		ConsumeMouse(now, mdx, mdy);
 		sint32 wheel = sWheelGame.exchange(0);
 
+		// The system's software keyboard (naming the horse; Cemu draws it, typing and its keys clicked with the pointer go
+		// to it): the game gets no input meanwhile, otherwise bound keys reach it (Sprint's Shift = B closes the keyboard).
+		// Keys held when it opens or closes (the confirming Enter / E) are not passed on.
+		static bool sKeyboardWas = false;
+		const bool keyboard = swkbd_hasKeyboardInputHook();
+		if (keyboard != sKeyboardWas)
+		{
+			sKeyboardWas = keyboard;
+			cemuLog_log(LogType::Force, "PCE input: software keyboard {}", keyboard ? "open" : "closed");
+			ClearKeyPresses();
+			LatchHeldKeys();
+		}
+
 		for (size_t i = 0; i < sKeyLatched.size(); i++)
 			if (sKeyLatched[i].load() && !sKeyDown[i].load())
 				sKeyLatched[i] = false;
-		const bool inputEnabled = (sFocused.load() || sDebug.forceFocus.load()) && !sOverlayOpen.load() && !sEmbedFocus.load() && !sPopupOpen.load();
+		const bool inputEnabled = (sFocused.load() || sDebug.forceFocus.load()) && !sOverlayOpen.load() && !sEmbedFocus.load() && !sPopupOpen.load() && !keyboard;
 
 		std::array<bool, kActionCount> act{};
 		if (inputEnabled)

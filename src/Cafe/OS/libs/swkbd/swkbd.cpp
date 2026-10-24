@@ -258,6 +258,34 @@ uint32 SwkbdDisappearKeyboard()
 	return 1;
 }
 
+// PC Edition dev bridge (tests of the PC input while the keyboard is up): shows / hides the input form as a game would,
+// returns the text typed into it
+std::string swkbd_debugForm(int show)
+{
+	if (!swkbdInternalState && show == 1)
+	{
+		// (the game creates it only when it needs it: as SwkbdCreate does, the game finds it there then)
+		MPTR swkbdInternalStateMPTR = coreinit_allocFromSysArea(sizeof(swkbdInternalState_t), 4);
+		swkbdInternalState = (swkbdInternalState_t*)memory_getPointerFromVirtualOffset(swkbdInternalStateMPTR);
+		memset(swkbdInternalState, 0x00, sizeof(swkbdInternalState_t));
+	}
+	if (!swkbdInternalState)
+		return "err no keyboard";
+	if (show == 1 && !swkbdInternalState->isActive)
+	{
+		swkbdInternalState->formStringLength = 0;
+		swkbdInternalState->formStringBuffer[0] = '\0';
+		swkbdInternalState->maxTextLength = 10;
+		swkbdInternalState->keyboardOnlyMode = false;
+		swkbdInternalState->decideButtonWasPressed = false;
+		swkbdInternalState->isActive = true;
+	}
+	else if (show == 0)
+		swkbdInternalState->isActive = false;
+	return fmt::format("active={} decided={} text='{}'", swkbdInternalState->isActive, swkbdInternalState->decideButtonWasPressed,
+					   boost::nowide::narrow(std::wstring(swkbdInternalState->formStringBuffer, swkbdInternalState->formStringLength)));
+}
+
 uint16be* SwkbdGetInputFormString()
 {
 	for(sint32 i=0; i<swkbdInternalState->formStringLength; i++)
