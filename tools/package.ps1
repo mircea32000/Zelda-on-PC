@@ -5,7 +5,7 @@
 #
 # Requirements: Inno Setup 6.3 or newer (https://jrsoftware.org/isinfo.php) and a finished build (or pass -Build).
 # Usage: powershell -ExecutionPolicy Bypass -File tools\package.ps1 [-Version 1.3.1] [-Build] [-StageOnly]
-param([string]$Version = "1.3.9", [switch]$Build, [switch]$StageOnly)
+param([string]$Version = "1.4.0", [switch]$Build, [switch]$StageOnly)
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot

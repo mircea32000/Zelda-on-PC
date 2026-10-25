@@ -130,8 +130,22 @@ namespace pce::UI
 		float alpha = 1.0f;
 		uint32 paneAddr = 0;
 		char paneName[32] = {0};
+		// the map as the game draws it (N_MapT_00 / N_MapSR_00): the world point at the center and layout pixels
+		// (1280 x 720) per meter, scales of the minimap's panes included
+		bool hasMapTransform = false;
+		float mapCenterX = 0.0f, mapCenterZ = 0.0f;
+		float mapLayoutPerMeter = 0.0f;
 	};
 	MinimapInfo GetMinimapInfo();
+	// the minimap and Link's position as in the frame the GPU thread is showing (taken per game frame with OnGameFrame,
+	// like the HUD prompts); false before the first frame
+	struct MinimapFrame
+	{
+		MinimapInfo info;
+		bool hasPose = false;
+		float px = 0.0f, py = 0.0f, pz = 0.0f, camYaw = 0.0f;
+	};
+	bool GetMinimapFrame(MinimapFrame& f);
 
 	// HUD action buttons drawn by the overlay in place of the hidden GamePad artwork (rect normalized, glyph = prompt code)
 	struct HudPrompt

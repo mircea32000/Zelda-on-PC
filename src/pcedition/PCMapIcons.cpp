@@ -2265,11 +2265,21 @@ namespace pce::MapIcons
 		if (!ui.hud || ui.anyMenu || ui.inventory || ui.map || ui.dialog || ui.title || ui.scope || ui.cameraRune)
 			return;
 
-		float px = 0, py = 0, pz = 0, camYaw = 0;
-		if (!Input::GetPlayerPose(px, py, pz, camYaw))
+		// the minimap and Link's position of the very frame shown (read now, they would be a frame or two ahead of the
+		// picture: the icons trailed the minimap while turning)
+		UI::MinimapFrame mf;
+		if (!UI::GetMinimapFrame(mf))
+		{
+			mf.info = UI::GetMinimapInfo();
+			mf.hasPose = Input::GetPlayerPose(mf.px, mf.py, mf.pz, mf.camYaw);
+		}
+		const UI::MinimapInfo& minfo = mf.info;
+		if (!mf.hasPose && !minfo.hasMapTransform)
 			return;
-
-		const UI::MinimapInfo minfo = UI::GetMinimapInfo();
+		// the point the game's map is centred on (its own, so the icons move with the map exactly), else Link's
+		const float px = minfo.hasMapTransform ? minfo.mapCenterX : mf.px;
+		const float pz = minfo.hasMapTransform ? minfo.mapCenterZ : mf.pz;
+		const float camYaw = mf.camYaw;
 		const float compassAngle = minfo.hasNorthRotation ? minfo.compassAngle : camYaw;
 
 		ImGuiIO& io = ImGui::GetIO();
@@ -2300,9 +2310,11 @@ namespace pce::MapIcons
 
 		RefreshLiveFlags(frame);
 
-		constexpr float kMinimapRangeMeters = 120.0f;
+		// the game's scale (1.8 layout pixels per meter on foot: the minimap shows about 44 m around Link); without it the
+		// old estimate
 		const float radarPixelRadius = radiusPix * 0.90f;
-		const float meterToPixel = radarPixelRadius / kMinimapRangeMeters;
+		const float meterToPixel = minfo.hasMapTransform ? minfo.mapLayoutPerMeter * (picH / 720.0f) : radarPixelRadius / 120.0f;
+		const float kMinimapRangeMeters = radarPixelRadius / meterToPixel;
 		const float iconRadius = std::clamp(5.5f * (picH / 720.0f), 4.0f, 9.0f);
 
 		const float cosA = cosf(compassAngle);

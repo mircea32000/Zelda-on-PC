@@ -269,10 +269,14 @@ namespace pce::DevBridge
 					const auto minfo = UI::GetMinimapInfo();
 					float px = 0, py = 0, pz = 0, camYaw = 0;
 					const bool hasPose = Input::GetPlayerPose(px, py, pz, camYaw);
-					return fmt::format("pose={} pos=({:.1f},{:.1f},{:.1f}) yaw={:.4f} minfo:[vis={} c=({:.4f},{:.4f}) r={:.4f} angle={:.4f} hasNorth={}]",
+					UI::MinimapFrame mf;
+					const bool hasFrame = UI::GetMinimapFrame(mf);
+					return fmt::format("pose={} pos=({:.1f},{:.1f},{:.1f}) yaw={:.4f} minfo:[vis={} c=({:.4f},{:.4f}) r={:.4f} angle={:.4f} hasNorth={} "
+									   "map={} mapCenter=({:.1f},{:.1f}) perMeter={:.3f}] shownFrame={} shownCenter=({:.1f},{:.1f}) shownAngle={:.4f}",
 						hasPose, px, py, pz, camYaw,
 						minfo.visible, minfo.normCenterX, minfo.normCenterY, minfo.normRadius,
-						minfo.compassAngle, minfo.hasNorthRotation);
+						minfo.compassAngle, minfo.hasNorthRotation, minfo.hasMapTransform, minfo.mapCenterX, minfo.mapCenterZ, minfo.mapLayoutPerMeter,
+						hasFrame, mf.info.mapCenterX, mf.info.mapCenterZ, mf.info.compassAngle);
 				}
 				if (c == "frame")
 					return std::to_string(dbg.frameCounter.load());

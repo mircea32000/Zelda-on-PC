@@ -867,6 +867,11 @@ namespace pce::UI
 		std::vector<HudPrompt> sHudPrompts;                              // prompts of the frame the GPU thread is showing
 		std::vector<HudPrompt> sHudLast;                                 // snapshot of the previous game frame
 		uint64 sHudSeqCpu = 0, sHudSeqGpu = 0;
+		// the minimap's rotation, place and size and Link's position, the same way: the icons drawn on the minimap belong to
+		// the picture of it they are drawn over (read when the overlay draws, they were a frame or two off while turning)
+		std::deque<std::pair<uint64, MinimapFrame>> sMiniQueue;
+		MinimapFrame sMiniShown, sMiniLast;
+		bool sMiniShownValid = false;
 		std::atomic<float> sFadeNow{0.0f};
 		// developer: per frame record of the prompt panes
 		struct HudTraceEntry
@@ -1662,10 +1667,14 @@ namespace pce::UI
 		info.normCenterY = 600.0f / kLayoutH;
 		info.normRadius = 79.0f / kLayoutH;
 
+		// the panes are found once per layout (it is read every frame: the walk is not repeated while they stay valid)
+		static uint32 sCacheRoot = 0, sCacheIconArea = 0, sCacheNorth = 0, sCacheRotate = 0, sCacheMiniLine = 0, sCacheMapSR = 0, sCacheMapT = 0;
 		uint32 iconAreaPane = 0;
 		uint32 northPane = 0;
 		uint32 rotatePane = 0;
 		uint32 miniLinePane = 0;
+		uint32 mapSRPane = 0; // the map's scale and rotation
+		uint32 mapTPane = 0;  // the map moved by Link's position
 
 		auto searchRoot = [&](const std::string& scrName) {
 			auto it = sScreens.find(scrName);
@@ -1677,6 +1686,19 @@ namespace pce::UI
 			const uint32 root = memory_readU32(lyt + 0x0C);
 			if (!root || !PaneOk(root))
 				return;
+			auto still = [](uint32 pane, const char* name) { return pane == 0 || (PaneOk(pane) && ReadName(pane) == name); };
+			if (root == sCacheRoot && (sCacheIconArea || sCacheRotate) && still(sCacheIconArea, "N_IconArea_00") && still(sCacheNorth, "Pa_North_00") &&
+				still(sCacheRotate, "N_Rotate_00") && still(sCacheMiniLine, "N_MiniMapLine_00") && still(sCacheMapSR, "N_MapSR_00") &&
+				still(sCacheMapT, "N_MapT_00"))
+			{
+				iconAreaPane = sCacheIconArea;
+				northPane = sCacheNorth;
+				rotatePane = sCacheRotate;
+				miniLinePane = sCacheMiniLine;
+				mapSRPane = sCacheMapSR;
+				mapTPane = sCacheMapT;
+				return;
+			}
 
 			std::function<void(uint32, int)> walk = [&](uint32 pane, int depth) {
 				if (depth > 20 || !PaneOk(pane))
@@ -1690,8 +1712,12 @@ namespace pce::UI
 					rotatePane = pane;
 				else if (n == "N_MiniMapLine_00")
 					miniLinePane = pane;
+				else if (n == "N_MapSR_00" && !mapSRPane)
+					mapSRPane = pane;
+				else if (n == "N_MapT_00" && !mapTPane)
+					mapTPane = pane;
 
-				if (iconAreaPane && northPane && rotatePane)
+				if (iconAreaPane && northPane && rotatePane && mapSRPane && mapTPane)
 					return;
 
 				const uint32 head = pane + kChildHead;
@@ -1705,6 +1731,13 @@ namespace pce::UI
 				}
 			};
 			walk(root, 0);
+			sCacheRoot = root;
+			sCacheIconArea = iconAreaPane;
+			sCacheNorth = northPane;
+			sCacheRotate = rotatePane;
+			sCacheMiniLine = miniLinePane;
+			sCacheMapSR = mapSRPane;
+			sCacheMapT = mapTPane;
 		};
 
 		searchRoot("AppMap_00");
@@ -1727,13 +1760,31 @@ namespace pce::UI
 			}
 		}
 
-		if (rotatePane && PaneOk(rotatePane))
+		// The map itself (measured): its texture has 2 units per meter (Pa_Map_00 is 24000 x 20000 for Hyrule's 12000 x 10000
+		// m), x east, y north; N_MapT_00 moves it by minus Link's point, N_MapSR_00 turns it (the same angle as the compass)
+		// and the panes above scale it (Pa_Map_00: 0.9, and the minimap's appearing animation).
+		if (mapTPane && mapSRPane && PaneOk(mapTPane) && PaneOk(mapSRPane))
+		{
+			float scale = 2.0f;
+			for (uint32 p = mapTPane, guard = 0; p && PaneOk(p) && guard < 32; p = memory_readU32(p + kParent), guard++)
+				scale *= RF(p + kScale);
+			if (scale > 0.01f)
+			{
+				info.hasMapTransform = true;
+				info.mapCenterX = -RF(mapTPane + kTranslate) / 2.0f;
+				info.mapCenterZ = RF(mapTPane + kTranslate + 4) / 2.0f;
+				info.mapLayoutPerMeter = scale;
+				info.compassAngle = RF(mapSRPane + 0x30) * (3.14159265358979323846f / 180.0f);
+				info.hasNorthRotation = true;
+			}
+		}
+		if (!info.hasMapTransform && rotatePane && PaneOk(rotatePane))
 		{
 			const float rotDeg = RF(rotatePane + 0x30);
 			info.compassAngle = rotDeg * (3.14159265358979323846f / 180.0f);
 			info.hasNorthRotation = true;
 		}
-		else if (northPane && PaneOk(northPane))
+		else if (!info.hasMapTransform && northPane && PaneOk(northPane))
 		{
 			const float rotDeg = RF(northPane + 0x30);
 			info.compassAngle = rotDeg * (3.14159265358979323846f / 180.0f);
@@ -1757,26 +1808,33 @@ namespace pce::UI
 
 	void OnGameFrame()
 	{
-		if (!Prompts::Active())
-			return;
 		std::vector<HudPrompt> prompts;
+		const bool hud = Prompts::Active();
+		if (hud)
 		{
 			std::lock_guard lock(sMutex);
 			RefreshDoCommand(sState, prompts);
 		}
+		MinimapFrame mini;
+		mini.info = GetMinimapInfo();
+		mini.hasPose = Input::GetPlayerPose(mini.px, mini.py, mini.pz, mini.camYaw);
 		std::lock_guard lock(sHudMutex);
 		// The image the game hands over now was drawn before this frame's UI update (measured: the panes in memory are one
 		// update ahead of the picture), so it gets the snapshot taken one frame ago.
-		sHudQueue.emplace_back(++sHudSeqCpu, std::move(sHudLast));
+		++sHudSeqCpu;
+		if (hud)
+			sHudQueue.emplace_back(sHudSeqCpu, std::move(sHudLast));
 		sHudLast = std::move(prompts);
 		while (sHudQueue.size() > 16)
 			sHudQueue.pop_front();
+		sMiniQueue.emplace_back(sHudSeqCpu, sMiniLast);
+		sMiniLast = mini;
+		while (sMiniQueue.size() > 16)
+			sMiniQueue.pop_front();
 	}
 
 	void OnGpuFrame()
 	{
-		if (!Prompts::Active())
-			return;
 		std::lock_guard lock(sHudMutex);
 		++sHudSeqGpu;
 		while (!sHudQueue.empty() && sHudQueue.front().first <= sHudSeqGpu)
@@ -1784,6 +1842,19 @@ namespace pce::UI
 			sHudPrompts = std::move(sHudQueue.front().second);
 			sHudQueue.pop_front();
 		}
+		while (!sMiniQueue.empty() && sMiniQueue.front().first <= sHudSeqGpu)
+		{
+			sMiniShown = sMiniQueue.front().second;
+			sMiniShownValid = true;
+			sMiniQueue.pop_front();
+		}
+	}
+
+	bool GetMinimapFrame(MinimapFrame& f)
+	{
+		std::lock_guard lock(sHudMutex);
+		f = sMiniShown;
+		return sMiniShownValid;
 	}
 
 	std::string PaneChain(const std::string& screen, const std::string& name)
