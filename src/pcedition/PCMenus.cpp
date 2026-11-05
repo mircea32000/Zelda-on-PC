@@ -467,6 +467,10 @@ namespace pce::Menus
 			sSmoothSlide = false;
 			sHoverChase = false;
 			sHoverDonePart = 0;
+			sFocusPart = 0;
+			sLastSelected = -2;
+			sLastMx = -1.0f;
+			sLastMy = -1.0f;
 			io.holdAdd |= sNav.Step() | sConfirm.Step();
 			return;
 		}
@@ -485,7 +489,7 @@ namespace pce::Menus
 		if (pointerScreen && !mapMode)
 		{
 			io.consumeMouseButtons = true;
-			if (std::fabs(io.mouseX - sLastMx) + std::fabs(io.mouseY - sLastMy) > 0.002f)
+			if (sLastMx >= 0.0f && std::fabs(io.mouseX - sLastMx) + std::fabs(io.mouseY - sLastMy) > 0.002f)
 			{
 				if (io.frame - sLastMouseMoveFrame >= 20)
 					sHoverDonePart = 0; // the mouse moves again after a rest: hovering selects again

@@ -738,6 +738,7 @@ static void InitUniformLayoutFromDecompiler(
     }
 
     shader->uniform.uniformRangeSize = offsets.offset_endOfBlock;
+    shader->uniform.loc_pce = offsets.offset_pce;
 }
 
 LatteDecompilerShader* LatteShader_CreateShaderFromDecompilerOutput(LatteDecompilerOutput_t& decompilerOutput, uint64 baseHash, bool calculateAuxHash, uint64 optionalAuxHash, uint32* contextRegister)

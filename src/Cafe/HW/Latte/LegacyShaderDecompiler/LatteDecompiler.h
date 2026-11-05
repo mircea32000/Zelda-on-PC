@@ -64,6 +64,8 @@ struct LatteDecompilerShaderResourceMapping
 	sint8 uniformBuffersBindingPoint[LATTE_NUM_MAX_UNIFORM_BUFFERS];
 	// shader storage buffer for transform feedback (if alternative mode is used)
 	sint8 tfStorageBindingPoint{UNUSED_BINDING};
+	// BotW PC Edition: storage buffer with the uniforms of the previous frame (vertex shader, motion vectors)
+	sint8 pcePrevBindingPoint{UNUSED_BINDING};
 	// attributes (vertex shader only)
 	sint8 attributeMapping[LATTE_NUM_MAX_ATTRIBUTE_LOCATIONS];
 	// Vulkan exclusive
@@ -162,6 +164,9 @@ struct LatteDecompilerShader
 	bool textureIsIntegerFormat[LATTE_NUM_MAX_TEX_UNITS]{};
 	// analyzer stage (uniforms)
 	uint8 uniformMode{0}; // determines how uniforms are managed within the shader (see LATTE_DECOMPILER_UNIFORM_MODE_* constants)
+	// BotW PC Edition: vertex shader that also computes the position of the previous frame (uniform mode, 0 = no)
+	uint8 pceMode{0};
+	uint16 pceRemappedCount{0}; // number of entries of uf_remappedVS
 	uint64 uniformDataHash64[2]{0}; // used to avoid redundant calls to glUniform*
 	std::vector<LatteDecompilerRemappedUniformEntry_t> list_remappedUniformEntries;
 	// analyzer stage (textures)
@@ -206,6 +211,7 @@ struct LatteDecompilerShader
 		sint32 loc_verticesPerInstance;
 		sint32 loc_streamoutBufferBase[LATTE_NUM_STREAMOUT_BUFFER];
 		uint32 uniformRangeSize; // entire size of uniform variable block
+		sint32 loc_pce{-1}; // BotW PC Edition: uf_pce (where the uniforms of the previous frame are)
 	}uniform{ 0 };
 	// fast access
 	struct _RemappedUniformBufferGroup
@@ -234,6 +240,7 @@ struct LatteDecompilerOutputUniformOffsets
 	sint32 offset_texScale[LATTE_NUM_MAX_TEX_UNITS];
 	sint32 offset_verticesPerInstance{-1};
 	sint32 offset_streamoutBufferBase[LATTE_NUM_STREAMOUT_BUFFER]{ -1, -1, -1, -1 };
+	sint32 offset_pce{-1}; // BotW PC Edition
 	sint32 offset_endOfBlock; // stores size of uniform variable block
 
 	LatteDecompilerOutputUniformOffsets()

@@ -151,6 +151,16 @@ namespace LatteDecompiler
 			}
 		}
 
+		// BotW PC Edition: where the uniforms of the previous frame are in the storage buffer pcePrevI (in ivec4):
+		// [0].x != 0 if there are, [0].y the remapped array, [1 + i / 4][i % 4] uniform buffer i
+		if (rendererType == RendererAPI::Vulkan && decompilerContext->pce.prevBody)
+		{
+			const sint32 count = (shader->uniformMode == LATTE_DECOMPILER_UNIFORM_MODE_FULL_CBANK) ? 5 : 1;
+			uniformCurrentOffset = (uniformCurrentOffset + 15) & ~15;
+			shaderSrc->addFmt("uniform ivec4 uf_pce[{}];" _CRLF, count);
+			uniformOffsets.offset_pce = uniformCurrentOffset;
+			uniformCurrentOffset += 16 * count;
+		}
 		uniformOffsets.offset_endOfBlock = uniformCurrentOffset;
 		if (rendererType == RendererAPI::Vulkan)
 		{
@@ -197,6 +207,12 @@ namespace LatteDecompiler
 		else
 		{
 			cemu_assert_debug(false);
+		}
+		if (decompilerContext->pce.prevBody)
+		{
+			shaderSrc->addFmt("layout(set = {}, binding = {}, std430) readonly buffer PcePrevBlock" _CRLF, (sint32)decompilerContext->output->resourceMappingVK.setIndex,
+							  (sint32)decompilerContext->output->resourceMappingVK.pcePrevBindingPoint);
+			shaderSrc->add("{" _CRLF "ivec4 pcePrevI[];" _CRLF "};" _CRLF _CRLF);
 		}
 	}
 
@@ -286,14 +302,18 @@ namespace LatteDecompiler
 			if (decompilerContext->analyzer.hasStreamoutWrite)
 				src->add("#define XFB_BLOCK_LAYOUT(__bufferIndex, __stride, __location) layout(location = __location, xfb_buffer = __bufferIndex, xfb_stride = __stride, xfb_offset = 0)" _CRLF);
 
+			// (BotW PC Edition: with the clip positions of this and of the previous frame for the motion vectors)
+			const char* pceSet = (decompilerContext->shaderType == LatteConst::ShaderType::Vertex && decompilerContext->pce.varyings) ? "; pceCurPos = gl_Position; pcePrevPos = pcePrevPosTmp" : "";
 			if (decompilerContext->contextRegistersNew->PA_CL_CLIP_CNTL.get_DX_CLIP_SPACE_DEF())
 			{
-				src->add("#define SET_POSITION(_v) gl_Position = _v" _CRLF);
+				src->addFmt("#define SET_POSITION(_v) gl_Position = _v{}" _CRLF, pceSet);
 			}
 			else
 			{
-				src->add("#define SET_POSITION(_v) gl_Position = _v; gl_Position.z = (gl_Position.z + gl_Position.w) / 2.0" _CRLF);
+				src->addFmt("#define SET_POSITION(_v) gl_Position = _v{}; gl_Position.z = (gl_Position.z + gl_Position.w) / 2.0" _CRLF, pceSet);
 			}
+			if (decompilerContext->pce.prevBody)
+				src->add("#define PCE_SET_PREV(_v) pcePrevPosTmp = _v" _CRLF);
 
 			if (decompilerContext->shaderType == LatteConst::ShaderType::Vertex || decompilerContext->shaderType == LatteConst::ShaderType::Geometry)
 			{
@@ -523,6 +543,19 @@ namespace LatteDecompiler
 				}
 			}
 		}
+		// BotW PC Edition: motion vectors
+		if (decompilerContext->pce.varyings)
+		{
+			const char* dir = decompilerContext->shaderType == LatteConst::ShaderType::Vertex ? "out" : "in";
+			src->addFmt("layout(location = 30) {} vec4 pceCurPos;" _CRLF, dir);
+			src->addFmt("layout(location = 31) {} vec4 pcePrevPos;" _CRLF, dir);
+			if (decompilerContext->shaderType == LatteConst::ShaderType::Vertex)
+				src->add("vec4 pcePrevPosTmp = vec4(0.0);" _CRLF);
+		}
+		if (decompilerContext->pce.prevBody)
+			src->add("void pceRunPrev();" _CRLF);
+		if (decompilerContext->pce.velocityOut)
+			src->add("layout(location = 6) out vec4 pceVelocity;" _CRLF);
 		// output defines
 		if (decompilerContext->shaderType == LatteConst::ShaderType::Pixel)
 		{

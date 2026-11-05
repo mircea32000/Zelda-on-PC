@@ -14,6 +14,7 @@
 #include "util/helpers/StringBuf.h"
 
 #include <bitset>
+#include <functional>
 #include <boost/container/small_vector.hpp>
 
 #define _CRLF	"\r\n"
@@ -3855,6 +3856,83 @@ void LatteDecompiler_emitAttributeImport(LatteDecompilerShaderContext* shaderCon
 	src->add(");" _CRLF);
 }
 
+// BotW PC Edition: in text, every "<name>[index]" replaced (name must not be the tail of a longer identifier)
+static void _pceReplaceIndexed(std::string& s, std::string_view name, const std::function<std::string(const std::string&)>& make)
+{
+	size_t pos = 0;
+	while ((pos = s.find(name, pos)) != std::string::npos)
+	{
+		const size_t open = pos + name.size();
+		if ((pos > 0 && (isalnum((unsigned char)s[pos - 1]) || s[pos - 1] == '_')) || open >= s.size() || s[open] != '[')
+		{
+			pos++;
+			continue;
+		}
+		size_t close = open;
+		for (sint32 depth = 0; close < s.size(); close++)
+		{
+			if (s[close] == '[')
+				depth++;
+			else if (s[close] == ']' && --depth == 0)
+				break;
+		}
+		if (close >= s.size())
+			return;
+		const std::string replacement = make(s.substr(open + 1, close - open - 1));
+		s.replace(pos, close + 1 - pos, replacement);
+		pos++; // (the index may hold another one)
+	}
+}
+
+static void _pceReplaceAll(std::string& s, std::string_view from, std::string_view to)
+{
+	for (size_t pos = 0; (pos = s.find(from, pos)) != std::string::npos; pos += to.size())
+		s.replace(pos, from.size(), to);
+}
+
+// BotW PC Edition: pceRunPrev() is the body of main() with the uniforms of the previous frame (storage buffer pcePrevI, see
+// uf_pce). It only sets pcePrevPosTmp (the clip position of the previous frame); the other outputs go to locals.
+static void _pceEmitPrevBody(LatteDecompilerShaderContext* shaderContext, std::string body)
+{
+	StringBuf* src = shaderContext->shaderSource;
+	if (shaderContext->shader->uniformMode == LATTE_DECOMPILER_UNIFORM_MODE_REMAPPED)
+	{
+		_pceReplaceIndexed(body, "uf_remappedVS", [](const std::string& index) { return fmt::format("pcePrevI[uf_pce[0].y+({})]", index); });
+	}
+	else
+	{
+		for (sint32 i = LATTE_NUM_MAX_UNIFORM_BUFFERS - 1; i >= 0; i--)
+		{
+			_pceReplaceIndexed(body, fmt::format("uf_blockVS{}", i), [i](const std::string& index) {
+				return fmt::format("intBitsToFloat(pcePrevI[uf_pce[{}].{}+({})])", 1 + i / 4, "xyzw"[i % 4], index);
+			});
+		}
+	}
+	_pceReplaceAll(body, "SET_POSITION(", "PCE_SET_PREV(");
+	_pceReplaceAll(body, "passParameterSem", "pceDummySem");
+	_pceReplaceAll(body, "gl_PointSize", "pceDummyPointSize");
+	std::set<sint32> dummies;
+	for (size_t pos = 0; (pos = body.find("pceDummySem", pos)) != std::string::npos;)
+	{
+		pos += 11;
+		sint32 id = 0;
+		bool any = false;
+		while (pos < body.size() && isdigit((unsigned char)body[pos]))
+		{
+			id = id * 10 + (body[pos++] - '0');
+			any = true;
+		}
+		if (any)
+			dummies.insert(id);
+	}
+	src->add("void pceRunPrev()" _CRLF "{" _CRLF);
+	for (sint32 id : dummies)
+		src->addFmt("vec4 pceDummySem{};" _CRLF, id);
+	src->add("float pceDummyPointSize;" _CRLF);
+	src->add(std::string_view(body));
+	src->add("}" _CRLF);
+}
+
 void LatteDecompiler_emitGLSLShader(LatteDecompilerShaderContext* shaderContext, LatteDecompilerShader* shader)
 {
 	StringBuf* src = new StringBuf(1024*1024*12); // reserve 12MB for generated source (we resize-to-fit at the end)
@@ -3880,6 +3958,21 @@ void LatteDecompiler_emitGLSLShader(LatteDecompilerShaderContext* shaderContext,
 	// start of main
 	src->add("void main()" _CRLF);
 	src->add("{" _CRLF);
+	// BotW PC Edition: motion vectors (the position of the previous frame first: the body below, again)
+	if (shader->shaderType == LatteConst::ShaderType::Vertex && shaderContext->pce.varyings)
+		src->add("pceCurPos = vec4(0.0);" _CRLF "pcePrevPos = vec4(0.0);" _CRLF);
+	if (shaderContext->pce.prevBody)
+	{
+		src->add("if (uf_pce[0].x != 0) pceRunPrev();" _CRLF);
+		shader->pceRemappedCount = (uint16)shader->list_remappedUniformEntries.size();
+	}
+	if (shaderContext->pce.velocityOut)
+	{
+		src->add("pceVelocity = vec4(32768.0, 32768.0, 0.0, 0.0);" _CRLF);
+		if (shaderContext->pce.varyings)
+			src->add("if (pcePrevPos.w > 0.0 && pceCurPos.w > 0.0) pceVelocity.xy = (pcePrevPos.xy / pcePrevPos.w - pceCurPos.xy / pceCurPos.w) * 0.5;" _CRLF);
+	}
+	const uint32 pceBodyStart = src->getLen();
 	// variable definition
 	if (shaderContext->typeTracker.useArrayGPRs == false)
 	{
@@ -4120,7 +4213,10 @@ void LatteDecompiler_emitGLSLShader(LatteDecompilerShaderContext* shaderContext,
 			src->add("gl_PointSize = uf_pointSize;" _CRLF);
 	}
 	// end of shader main
+	const uint32 pceBodyEnd = src->getLen();
 	src->add("}" _CRLF);
+	if (shaderContext->pce.prevBody)
+		_pceEmitPrevBody(shaderContext, std::string(src->c_str() + pceBodyStart, pceBodyEnd - pceBodyStart));
 	src->shrink_to_fit();
 	shader->strBuf_shaderSource = src;
 }

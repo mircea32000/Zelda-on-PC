@@ -321,6 +321,18 @@ void PipelineCompiler::CreateDescriptorSetLayout(VulkanRenderer* vkRenderer, Lat
 		descriptorSetLayoutBindings.emplace_back(entry);
 	}
 
+	// BotW PC Edition: storage buffer with the uniforms of the previous frame (motion vectors)
+	if (shader->resourceMapping.pcePrevBindingPoint >= 0)
+	{
+		VkDescriptorSetLayoutBinding entry{};
+		entry.binding = shader->resourceMapping.pcePrevBindingPoint;
+		entry.descriptorCount = 1;
+		entry.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		entry.pImmutableSamplers = nullptr;
+		entry.stageFlags = stageFlags;
+		descriptorSetLayoutBindings.emplace_back(entry);
+	}
+
 	if (shader->resourceMapping.uniformVarsBufferBindingPoint >= 0)
 		vkrPipelineInfo->dynamicOffsetInfo.hasUniformVar[stageIndex] = true;
 	if (shader->resourceMapping.hasUniformBuffers())
@@ -623,6 +635,14 @@ void PipelineCompiler::InitBlendState(const LatteContextRegister& latteRegister,
 			entry.alphaBlendOp = entry.colorBlendOp;
 			entry.srcAlphaBlendFactor = entry.srcColorBlendFactor;
 			entry.dstAlphaBlendFactor = entry.dstColorBlendFactor;
+		}
+
+		if (i == 6 && renderPassObj->m_pceVelocity)
+		{
+			// BotW PC Edition: velocity attachment (motion vectors), written by the scene's opaque geometry
+			entry.blendEnable = VK_FALSE;
+			const bool depthWrite = latteRegister.DB_DEPTH_CONTROL.get_Z_ENABLE() && latteRegister.DB_DEPTH_CONTROL.get_Z_WRITE_ENABLE();
+			entry.colorWriteMask = depthWrite ? (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT) : 0;
 		}
 
 		usesBlendConstants |= ConsumesBlendConstants(entry.srcColorBlendFactor);

@@ -1,5 +1,6 @@
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h"
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanFSR.h"
+#include "Cafe/HW/Latte/Renderer/Vulkan/VulkanPce.h"
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanFFX.h"
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanAPI.h"
 #include "Cafe/HW/Latte/Renderer/Vulkan/LatteTextureVk.h"
@@ -885,17 +886,17 @@ VulkanRenderer::VulkanRenderer() : Renderer(RendererAPI::Vulkan)
 	void* bufferPtr;
 	// init ringbuffer for uniform vars
 	m_uniformVarBufferMemoryIsCoherent = false;
-	if (memoryManager->CreateBuffer(UNIFORMVAR_RINGBUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, m_uniformVarBuffer, m_uniformVarBufferMemory))
+	if (memoryManager->CreateBuffer(UNIFORMVAR_RINGBUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, m_uniformVarBuffer, m_uniformVarBufferMemory))
 		m_uniformVarBufferMemoryIsCoherent = true;
-	else if (memoryManager->CreateBuffer(UNIFORMVAR_RINGBUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_uniformVarBuffer, m_uniformVarBufferMemory))
+	else if (memoryManager->CreateBuffer(UNIFORMVAR_RINGBUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_uniformVarBuffer, m_uniformVarBufferMemory))
 		m_uniformVarBufferMemoryIsCoherent = true; // unified memory
-	else if (memoryManager->CreateBuffer(UNIFORMVAR_RINGBUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, m_uniformVarBuffer, m_uniformVarBufferMemory))
+	else if (memoryManager->CreateBuffer(UNIFORMVAR_RINGBUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, m_uniformVarBuffer, m_uniformVarBufferMemory))
 		m_uniformVarBufferMemoryIsCoherent = true;
-	else if (memoryManager->CreateBuffer(UNIFORMVAR_RINGBUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_uniformVarBuffer, m_uniformVarBufferMemory))
+	else if (memoryManager->CreateBuffer(UNIFORMVAR_RINGBUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, m_uniformVarBuffer, m_uniformVarBufferMemory))
 		m_uniformVarBufferMemoryIsCoherent = true;
 	else
 	{
-		memoryManager->CreateBuffer(UNIFORMVAR_RINGBUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, m_uniformVarBuffer, m_uniformVarBufferMemory);
+		memoryManager->CreateBuffer(UNIFORMVAR_RINGBUFFER_SIZE, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, m_uniformVarBuffer, m_uniformVarBufferMemory);
 	}
 
 	if (!m_uniformVarBufferMemoryIsCoherent)
@@ -3326,7 +3327,9 @@ void VulkanRenderer::FSR_BuildMotionVectors(const float reproj[16], uint32 flags
 	draw_endRenderPass();
 	m_state.currentPipeline = VK_NULL_HANDLE;
 	const bool wasRecorded = m_fsrInputs->DumpRecorded();
-	m_fsrInputs->BuildMotionVectors(m_state.currentCommandBuffer, reproj, flags);
+	VulkanPce::VelocityImage velocity;
+	const bool hasVelocity = VulkanPce::GetVelocityForRead(velocity);
+	m_fsrInputs->BuildMotionVectors(m_state.currentCommandBuffer, reproj, flags, hasVelocity ? &velocity : nullptr);
 	if (!wasRecorded && m_fsrInputs->DumpRecorded())
 		m_fsrDumpCmdBuffer = GetCurrentCommandBufferId();
 }
@@ -4476,6 +4479,8 @@ VKRObjectRenderPass::VKRObjectRenderPass(AttachmentInfo_t& attachmentInfo, sint3
 		stateHash = std::rotl<uint64>(stateHash, 7);
 	}
 	m_hashForPipeline = stateHash;
+	// (BotW PC Edition: the game does not use color 6 in its G-buffer pass, a RG16F target there is the velocity image)
+	m_pceVelocity = (attachmentInfo.colorAttachment[6].isPresent || attachmentInfo.colorAttachment[6].viewObj) && attachmentInfo.colorAttachment[6].format == VK_FORMAT_R16G16_SFLOAT;
 
 	// setup Vulkan renderpass
 	std::vector<VkAttachmentDescription> attachments_descriptions;

@@ -6,13 +6,15 @@ std::vector<uint32> RendererShaderVk_CompileCompute(const std::string& source, s
 
 namespace
 {
-	// motion vectors by reprojection: uv of the same world point in the previous frame minus the current uv
+	// motion vectors: uv of the same point in the previous frame minus the current uv. The motion the scene wrote for its
+	// objects (velocity: half the clip space delta, 32768 = none), else the reprojection with the camera
 	const char* kMotionVectorShader = R"(#version 450
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(push_constant) uniform PC { mat4 reproj; ivec4 size; } pc;
 layout(set = 0, binding = 0) uniform sampler2D depthTex;
 layout(set = 0, binding = 1, rg16f) uniform writeonly image2D mvOut;
 layout(set = 0, binding = 2, r32f) uniform writeonly image2D depthOut;
+layout(set = 0, binding = 3) uniform sampler2D velocityTex;
 void main()
 {
 	ivec2 p = ivec2(gl_GlobalInvocationID.xy);
@@ -26,7 +28,14 @@ void main()
 	vec4 prev = pc.reproj * ndc;
 	vec2 prevNdc = prev.xy / max(abs(prev.w), 1e-6) * sign(prev.w);
 	vec2 prevUv = vec2(prevNdc.x * 0.5 + 0.5, flipY ? 0.5 - prevNdc.y * 0.5 : prevNdc.y * 0.5 + 0.5);
-	imageStore(mvOut, p, vec4(prevUv - uv, 0.0, 0.0));
+	vec2 mv = prevUv - uv;
+	if (pc.size.w != 0)
+	{
+		vec2 v = texelFetch(velocityTex, p, 0).xy;
+		if (abs(v.x) < 16384.0)
+			mv = vec2(v.x, flipY ? -v.y : v.y);
+	}
+	imageStore(mvOut, p, vec4(mv, 0.0, 0.0));
 	imageStore(depthOut, p, vec4(d, 0.0, 0.0, 0.0));
 }
 )";
@@ -148,12 +157,13 @@ bool VulkanFSRInputs::EnsurePipeline()
 	si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 	if (vkCreateSampler(m_device, &si, nullptr, &m_sampler) != VK_SUCCESS)
 		return false;
-	VkDescriptorSetLayoutBinding b[3]{};
+	VkDescriptorSetLayoutBinding b[4]{};
 	b[0] = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 	b[1] = {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 	b[2] = {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+	b[3] = {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
 	VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	li.bindingCount = 3;
+	li.bindingCount = 4;
 	li.pBindings = b;
 	if (vkCreateDescriptorSetLayout(m_device, &li, nullptr, &m_setLayout) != VK_SUCCESS)
 		return false;
@@ -188,7 +198,7 @@ bool VulkanFSRInputs::EnsurePipeline()
 	vkDestroyShaderModule(m_device, module, nullptr);
 	if (r != VK_SUCCESS)
 		return false;
-	VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4}};
+	VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4}};
 	VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 	pi.maxSets = 2;
@@ -240,21 +250,23 @@ bool VulkanFSRInputs::CaptureSnapshot(VkCommandBuffer cmd, VkImage color, VkForm
 		ai.descriptorSetCount = 1;
 		ai.pSetLayouts = &m_setLayout;
 		vkAllocateDescriptorSets(m_device, &ai, &m_set);
-		VkDescriptorImageInfo ii[3]{};
+		VkDescriptorImageInfo ii[4]{};
 		ii[0] = {m_sampler, m_depthCopy.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 		ii[1] = {VK_NULL_HANDLE, m_mv.view, VK_IMAGE_LAYOUT_GENERAL};
 		ii[2] = {VK_NULL_HANDLE, m_depthF.view, VK_IMAGE_LAYOUT_GENERAL};
-		VkWriteDescriptorSet w[3]{};
-		for (uint32 i = 0; i < 3; i++)
+		ii[3] = {m_sampler, m_depthCopy.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}; // (until there is a velocity image)
+		VkWriteDescriptorSet w[4]{};
+		for (uint32 i = 0; i < 4; i++)
 		{
 			w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 			w[i].dstSet = m_set;
 			w[i].dstBinding = i;
 			w[i].descriptorCount = 1;
-			w[i].descriptorType = i == 0 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+			w[i].descriptorType = (i == 0 || i == 3) ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 			w[i].pImageInfo = &ii[i];
 		}
-		vkUpdateDescriptorSets(m_device, 3, w, 0, nullptr);
+		vkUpdateDescriptorSets(m_device, 4, w, 0, nullptr);
+		m_velocityBound = VK_NULL_HANDLE;
 		m_layoutsInitialized = false;
 		m_hasSnapshot = false;
 	}
@@ -306,10 +318,39 @@ bool VulkanFSRInputs::CaptureColor(VkCommandBuffer cmd, VkImage color, VkFormat 
 	return true;
 }
 
-void VulkanFSRInputs::BuildMotionVectors(VkCommandBuffer cmd, const float reproj[16], uint32 flags)
+void VulkanFSRInputs::BuildMotionVectors(VkCommandBuffer cmd, const float reproj[16], uint32 flags, const VulkanPce::VelocityImage* velocity)
 {
 	if (!m_hasSnapshot || !m_pipeline)
 		return;
+	// the scene's velocity (same size as the depth)
+	if (velocity && (velocity->width != m_mv.width || velocity->height != m_mv.height))
+		velocity = nullptr;
+	if (velocity && velocity->view != m_velocityBound)
+	{
+		vkDeviceWaitIdle(m_device); // (m_set may still be used by a frame in flight)
+		VkDescriptorImageInfo ii{m_sampler, velocity->view, velocity->layout};
+		VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+		w.dstSet = m_set;
+		w.dstBinding = 3;
+		w.descriptorCount = 1;
+		w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		w.pImageInfo = &ii;
+		vkUpdateDescriptorSets(m_device, 1, &w, 0, nullptr);
+		m_velocityBound = velocity->view;
+	}
+	if (velocity && velocity->view != m_velocityBound)
+		velocity = nullptr;
+	if (velocity)
+	{
+		VkImageMemoryBarrier vb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+		vb.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		vb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		vb.oldLayout = vb.newLayout = velocity->layout;
+		vb.srcQueueFamilyIndex = vb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		vb.image = velocity->image;
+		vb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &vb);
+	}
 	struct
 	{
 		float m[16]; // column major for GLSL
@@ -321,6 +362,7 @@ void VulkanFSRInputs::BuildMotionVectors(VkCommandBuffer cmd, const float reproj
 	pc.size[0] = (sint32)m_mv.width;
 	pc.size[1] = (sint32)m_mv.height;
 	pc.size[2] = (sint32)flags;
+	pc.size[3] = velocity ? 1 : 0;
 	// previous readers of the outputs (FSR, dumps) must be done
 	VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
 	mb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;

@@ -112,6 +112,8 @@ namespace pce
 					out = (v == "1" || boost::iequals(v, "true") || boost::iequals(v, "on") || boost::iequals(v, "yes"));
 				else if constexpr (std::is_same_v<T, int>)
 					out = std::stoi(v);
+				else if constexpr (std::is_same_v<T, uint64>)
+					out = std::stoull(v);
 				else if constexpr (std::is_same_v<T, float>)
 					out = std::stof(v);
 				else if constexpr (std::is_same_v<T, std::string>)
@@ -140,8 +142,10 @@ namespace pce
 	void Settings::ResetAll()
 	{
 		std::string keepPath = gamePath;
+		uint64 keepPlayTime = playTimeSeconds;
 		*this = Settings();
 		gamePath = keepPath;
+		playTimeSeconds = keepPlayTime;
 		ResetBindings();
 	}
 
@@ -197,6 +201,7 @@ namespace pce
 			Get(m, "Equipment", "WheelReleaseDelayMs", s.wheelReleaseDelayMs);
 			Get(m, "Equipment", "SelectorMouseStep", s.selectorMouseStep);
 			Get(m, "Equipment", "SelectorMoveKeys", s.selectorMoveKeys);
+			Get(m, "Equipment", "InvertSelectorScroll", s.selectorInvertScroll);
 			Get(m, "Equipment", "InventoryMoveKeys", s.inventoryMoveKeys);
 			Get(m, "Tilt", "Sensitivity", s.tiltSensitivity);
 			Get(m, "Tilt", "InvertX", s.tiltInvertX);
@@ -208,7 +213,29 @@ namespace pce
 			Get(m, "Tilt", "InvertTurn", s.tiltInvertTurn);
 			Get(m, "Tilt", "Smoothing", s.tiltSmoothing);
 			Get(m, "Tilt", "MaxSpeed", s.tiltMaxSpeed);
-			Get(m, "Graphics", "Resolution", s.resolutionPreset);
+			Get(m, "Graphics", "AspectRatio", s.aspectRatio);
+			s.aspectRatio = std::clamp(s.aspectRatio, 0, 9);
+			if (auto gi = m.find("graphics"); gi != m.end() && gi->second.contains("resolutionpreset"))
+			{
+				Get(m, "Graphics", "ResolutionPreset", s.resolutionPreset);
+			}
+			else if (auto gi2 = m.find("graphics"); gi2 != m.end() && gi2->second.contains("resolution"))
+			{
+				int legacy = 1;
+				Get(m, "Graphics", "Resolution", legacy);
+				legacy = std::clamp(legacy, 0, 4);
+				static const int kMap16_9[5]  = {3, 5, 6, 7, 8};
+				static const int kMap16_10[5] = {0, 3, 4, 5, 6};
+				static const int kMap21_9[5]  = {0, 2, 3, 5, 6};
+				static const int kMap32_9[5]  = {0, 0, 1, 1, 2};
+				switch (s.aspectRatio)
+				{
+				case 2: s.resolutionPreset = kMap16_10[legacy]; break;
+				case 3: s.resolutionPreset = kMap21_9[legacy]; break;
+				case 4: s.resolutionPreset = kMap32_9[legacy]; break;
+				default: s.resolutionPreset = kMap16_9[legacy]; break;
+				}
+			}
 			Get(m, "Graphics", "AspectRatio", s.aspectRatio);
 			Get(m, "Graphics", "UltrawideHUD", s.ultrawideHud);
 			Get(m, "Graphics", "FPSLimit", s.fpsLimit);
@@ -238,9 +265,13 @@ namespace pce
 			s.temperatureUnit = std::clamp(s.temperatureUnit, 0, 2);
 			Get(m, "Game", "InventoryPageTurn", s.inventoryPageTurn);
 			s.inventoryPageTurn = std::clamp(s.inventoryPageTurn, 0, 2);
+			Get(m, "Game", "AutoUpdate", s.autoUpdate);
+			Get(m, "Game", "PlayTimeSeconds", s.playTimeSeconds);
 			Get(m, "Map", "Enabled", s.mapEnabled);
 			Get(m, "Map", "Overlay", s.mapOverlay);
 			Get(m, "Map", "Minimap", s.mapMinimap);
+			Get(m, "Map", "MinimapZoom", s.minimapZoom);
+			s.minimapZoom = std::clamp(s.minimapZoom, 0, 4);
 			Get(m, "Map", "PanelOpen", s.mapPanelOpen);
 			Get(m, "Map", "AutoHide", s.mapAutoHide);
 			Get(m, "Map", "DimClaimed", s.mapDimClaimed);
@@ -299,6 +330,7 @@ namespace pce
 		o << "WheelReleaseDelayMs=" << s.wheelReleaseDelayMs << "\n";
 		o << "SelectorMouseStep=" << s.selectorMouseStep << "\n";
 		o << "SelectorMoveKeys=" << b(s.selectorMoveKeys) << "\n";
+		o << "InvertSelectorScroll=" << b(s.selectorInvertScroll) << "\n";
 		o << "InventoryMoveKeys=" << b(s.inventoryMoveKeys) << "\n\n";
 		o << "[Tilt]\n";
 		o << "Sensitivity=" << s.tiltSensitivity << "\n";
@@ -312,7 +344,7 @@ namespace pce
 		o << "Smoothing=" << s.tiltSmoothing << "\n";
 		o << "MaxSpeed=" << s.tiltMaxSpeed << "\n\n";
 		o << "[Graphics]\n";
-		o << "Resolution=" << s.resolutionPreset << "\n";
+		o << "ResolutionPreset=" << s.resolutionPreset << "\n";
 		o << "AspectRatio=" << s.aspectRatio << "\n";
 		o << "UltrawideHUD=" << s.ultrawideHud << "\n";
 		o << "FPSLimit=" << s.fpsLimit << "\n";
@@ -333,11 +365,14 @@ namespace pce
 		o << "Path=" << s.gamePath << "\n";
 		o << "Language=" << s.language << "\n";
 		o << "TemperatureUnit=" << s.temperatureUnit << "\n";
-		o << "InventoryPageTurn=" << s.inventoryPageTurn << "\n\n";
+		o << "InventoryPageTurn=" << s.inventoryPageTurn << "\n";
+		o << "AutoUpdate=" << b(s.autoUpdate) << "\n";
+		o << "PlayTimeSeconds=" << s.playTimeSeconds << "\n\n";
 		o << "[Map]\n";
 		o << "Enabled=" << b(s.mapEnabled) << "\n";
 		o << "Overlay=" << b(s.mapOverlay) << "\n";
 		o << "Minimap=" << b(s.mapMinimap) << "\n";
+		o << "MinimapZoom=" << s.minimapZoom << "\n";
 		o << "PanelOpen=" << b(s.mapPanelOpen) << "\n";
 		o << "AutoHide=" << b(s.mapAutoHide) << "\n";
 		o << "DimClaimed=" << b(s.mapDimClaimed) << "\n";

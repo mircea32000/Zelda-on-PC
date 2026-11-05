@@ -1944,7 +1944,7 @@ namespace pce::Input
 			const bool gameplay = inputEnabled && !mio.pointerMode && !ui.anyMenu && !ui.dialog;
 			const bool sprintKey = act[(size_t)Action::Sprint], shieldKey = act[(size_t)Action::Target];
 			// while swimming the Sprint key is the swim dash, which must not stay held (it would drain the stamina)
-			if (!s.toggleSprint || !gameplay || ui.Has("Dash"))
+			if (!s.toggleSprint || !gameplay || ui.ButtonFor("Dash") == UI::Btn::X)
 				fs.sprintLatch = false;
 			else
 			{
@@ -2173,18 +2173,19 @@ namespace pce::Input
 				}
 				if (down(Action::Crouch))
 					remap(Action::Crouch, VPAD_STICK_L, VPAD_Y); // menus: Y (sort, ...) on the crouch key
-				if (ui.scope)
+				if (ui.scope || ui.cameraRune)
 				{
-					if (down(Action::Attack)) remap(Action::Attack, VPAD_Y, VPAD_A);   // place pin
-					if (down(Action::Bow)) remap(Action::Bow, VPAD_ZR, VPAD_B);     // quit scope
-				}
-				if (ui.cameraRune)
-				{
-					// the keys its prompts show: click = Capture, Esc (above) / right click = Quit, wheel = Zoom (d-pad up /
-					// down, held a few frames per notch: 60 frames zoom all the way)
+					// the keys its prompts show: click = Capture / Place pin, Esc (above) / right click = Quit, wheel = Zoom
+					// (d-pad up / down, held a few frames per notch: 60 frames zoom all the way)
 					if (down(Action::Attack)) remap(Action::Attack, VPAD_Y, VPAD_A);
-					if (down(Action::Bow)) remap(Action::Bow, VPAD_ZR, VPAD_B);
-					if (wheel != 0)
+					if (down(Action::Bow))
+					{
+						remap(Action::Bow, VPAD_ZR, VPAD_B);
+						fs.pushPullFrames = 0;
+					}
+					if (hold & VPAD_B)
+						fs.pushPullFrames = 0;
+					else if (wheel != 0)
 					{
 						const uint32 button = wheel > 0 ? VPAD_UP : VPAD_DOWN;
 						if (fs.pushPullButton != button)
@@ -2196,7 +2197,7 @@ namespace pce::Input
 			}
 			else
 			{
-				if (ui.Has("Dash") && (down(Action::Sprint) || down(Action::Bow)))
+				if (ui.ButtonFor("Dash") == UI::Btn::X && (down(Action::Sprint) || down(Action::Bow)))
 					remap(down(Action::Sprint) ? Action::Sprint : Action::Bow, VPAD_B | VPAD_ZR, btnOr("Dash", VPAD_X), false); // swim dash
 				if (ui.Has("Let go"))
 				{
@@ -2257,6 +2258,8 @@ namespace pce::Input
 					!ui.HasButton(UI::Btn::Y))
 					remap(Action::Attack, VPAD_Y, VPAD_A, false);
 			}
+			if (!ui.scope && !ui.cameraRune && !pushPullContext)
+				fs.pushPullFrames = 0;
 			if (fs.pushPullFrames > 0)
 			{
 				fs.pushPullFrames--;
@@ -2351,12 +2354,12 @@ namespace pce::Input
 		// that follow the one which opened it are taken all the same.
 		const bool ownSelector = sel.active ? sel.closeFrame < 0 : (fs.selClosedQpc != 0 && (double)(now - fs.selClosedQpc) / QpcFreq() < 0.25);
 		const bool selectorSteps = selectorsAllowed || (ownSelector && inputEnabled && !tilt && !pushPullContext && !mio.pointerMode &&
-														!ui.scope && !ui.inventory && !ui.map);
+														!ui.scope && !ui.cameraRune && !ui.inventory && !ui.map);
 		if ((wheelNext || wheelPrev) && selectorSteps)
 		{
 			if (!sel.active)
 				openSelector(Action::WeaponNext, false);
-			sel.pendingSteps += wheelNext - wheelPrev;
+			sel.pendingSteps += (wheelNext - wheelPrev) * (s.selectorInvertScroll ? -1 : 1);
 			sel.lastActivityQpc = now;
 		}
 		float selStickX = 0.0f;

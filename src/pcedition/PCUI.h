@@ -92,6 +92,7 @@ namespace pce::UI
 		bool hasBoxCursor = false;    // menu selection box (inventory, file select, system pages)
 		float boxX = 0, boxY = 0;     // its centre (normalized)
 		bool hasMap = false;          // world map shown on the TV
+		bool mapBlocked = false;      // sandstorm static or 3D dungeon map (Hyrule Castle / Divine Beasts) covers the world map
 		float mapX = 0, mapY = 0;     // screen position of the map origin (normalized)
 		uint32 mapCtrl = 0;           // map controller scroll state (vec2 target/current..., layout units), 0 = unknown
 		float mapScaleX = 1, mapScaleY = 1; // layout scale applied to the map origin's translation

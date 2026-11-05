@@ -12,6 +12,9 @@
 #include "Cafe/HW/Latte/Core/LatteShaderCache.h"
 #include "util/helpers/helpers.h"
 #include <openssl/sha.h>
+#include "Cafe/HW/Latte/Renderer/Vulkan/VulkanPce.h"
+#include "pcedition/PCEdition.h"
+#include "pcedition/PCSettings.h"
 
 struct
 {
@@ -167,7 +170,9 @@ void __getDepthBufferVkFormat(const LatteContextRegister& lcr, VkFormat& dbForma
 }
 
 // create placeholder renderpass for cached pipeline
-VKRObjectRenderPass* __CreateTemporaryRenderPass(const LatteDecompilerShader* pixelShader, const LatteContextRegister& lcr)
+// (BotW PC Edition: velocity = with the velocity attachment of the scene's G-buffer pass, see VulkanPce. Null if the
+// pass does not look like one: depth, color 1, no color 6)
+VKRObjectRenderPass* __CreateTemporaryRenderPass(const LatteDecompilerShader* pixelShader, const LatteContextRegister& lcr, bool velocity = false)
 {
 	VKRObjectRenderPass::AttachmentInfo_t attachmentInfo;
 
@@ -203,6 +208,14 @@ VKRObjectRenderPass* __CreateTemporaryRenderPass(const LatteDecompilerShader* pi
 		// no depth attachment
 		attachmentInfo.depthAttachment.viewObj = nullptr;
 		attachmentInfo.depthAttachment.isPresent = false;
+	}
+	if (velocity)
+	{
+		if (!dbMask || !(cbMask & (1 << 1)) || (cbMask & (1 << 6)))
+			return nullptr;
+		attachmentInfo.colorAttachment[6].viewObj = nullptr;
+		attachmentInfo.colorAttachment[6].isPresent = true;
+		attachmentInfo.colorAttachment[6].format = VulkanPce::kVelocityFormat;
 	}
 
 	return new VKRObjectRenderPass(attachmentInfo);
@@ -270,37 +283,49 @@ void VulkanPipelineStableCache::LoadPipelineFromCache(std::span<uint8> fileData)
 		cemu_assert_debug(false);
 		return;
 	}
-	auto renderPass = __CreateTemporaryRenderPass(pixelShader, *lcr);
-	// create pipeline info
-	m_pipelineIsCachedLock.lock();
-	PipelineInfo* pipelineInfo = new PipelineInfo(0, 0, vertexShader->compatibleFetchShader, vertexShader, pixelShader, geometryShader);
-	m_pipelineIsCachedLock.unlock();
-	// compile
-	{
-		PipelineCompiler pipelineCompiler;
-		bool requiresRobustBufferAccess = PipelineCompiler::CalcRobustBufferAccessRequirement(vertexShader, pixelShader, geometryShader);
-		if (!pipelineCompiler.InitFromCurrentGPUState(pipelineInfo, *lcr, renderPass, requiresRobustBufferAccess))
+	// compiles the pipeline for a render pass, on success it is flagged as present in cache
+	auto compile = [&](VKRObjectRenderPass* renderPass) -> bool {
+		// create pipeline info
+		m_pipelineIsCachedLock.lock();
+		PipelineInfo* pipelineInfo = new PipelineInfo(0, 0, vertexShader->compatibleFetchShader, vertexShader, pixelShader, geometryShader);
+		m_pipelineIsCachedLock.unlock();
+		// compile
 		{
-			s_spinlockSharedInternal.lock();
-			delete lcr;
-			delete cachedPipeline;
-			s_spinlockSharedInternal.unlock();
-			return;
+			PipelineCompiler pipelineCompiler;
+			bool requiresRobustBufferAccess = PipelineCompiler::CalcRobustBufferAccessRequirement(vertexShader, pixelShader, geometryShader);
+			if (!pipelineCompiler.InitFromCurrentGPUState(pipelineInfo, *lcr, renderPass, requiresRobustBufferAccess))
+			{
+				s_spinlockSharedInternal.lock();
+				delete pipelineInfo;
+				VulkanRenderer::GetInstance()->ReleaseDestructibleObject(renderPass);
+				s_spinlockSharedInternal.unlock();
+				return false;
+			}
+			pipelineCompiler.Compile(true, true, false);
 		}
-		pipelineCompiler.Compile(true, true, false);
+		// on success, calculate pipeline hash and flag as present in cache
+		uint64 pipelineBaseHash = vertexShader->baseHash;
+		uint64 pipelineStateHash = VulkanRenderer::draw_calculateGraphicsPipelineHash(vertexShader->compatibleFetchShader, vertexShader, geometryShader, pixelShader, renderPass, *lcr);
+		m_pipelineIsCachedLock.lock();
+		m_pipelineIsCached.emplace(pipelineBaseHash, pipelineStateHash);
+		m_pipelineIsCachedLock.unlock();
+		// clean up
+		s_spinlockSharedInternal.lock();
+		delete pipelineInfo;
+		VulkanRenderer::GetInstance()->ReleaseDestructibleObject(renderPass);
+		s_spinlockSharedInternal.unlock();
+		return true;
+	};
+	bool compiled = compile(__CreateTemporaryRenderPass(pixelShader, *lcr));
+	// BotW PC Edition: with frame generation the scene's G-buffer pass has the velocity attachment (motion vectors)
+	if (compiled && pce::IsActive() && pce::GetSettings().frameGeneration == 1)
+	{
+		if (VKRObjectRenderPass* velocityPass = __CreateTemporaryRenderPass(pixelShader, *lcr, true))
+			compile(velocityPass);
 	}
-	// on success, calculate pipeline hash and flag as present in cache
-	uint64 pipelineBaseHash = vertexShader->baseHash;
-	uint64 pipelineStateHash = VulkanRenderer::draw_calculateGraphicsPipelineHash(vertexShader->compatibleFetchShader, vertexShader, geometryShader, pixelShader, renderPass, *lcr);
-	m_pipelineIsCachedLock.lock();
-	m_pipelineIsCached.emplace(pipelineBaseHash, pipelineStateHash);
-	m_pipelineIsCachedLock.unlock();
-	// clean up
 	s_spinlockSharedInternal.lock();
-	delete pipelineInfo;
 	delete lcr;
 	delete cachedPipeline;
-	VulkanRenderer::GetInstance()->ReleaseDestructibleObject(renderPass);
 	s_spinlockSharedInternal.unlock();
 }
 

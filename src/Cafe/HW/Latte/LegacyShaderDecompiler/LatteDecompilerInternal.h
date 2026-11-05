@@ -255,6 +255,13 @@ struct LatteDecompilerShaderContext
 
 	// emitter
 	bool hasUniformVarBlock;
+	// BotW PC Edition: per-object motion vectors for frame generation (see _initPce)
+	struct
+	{
+		bool varyings; // VS / PS: the clip positions of this and of the previous frame go to the pixel shader
+		bool prevBody; // VS: the body runs a second time with the uniforms of the previous frame (pceRunPrev)
+		bool velocityOut; // PS: writes the screen motion to color output 6
+	}pce;
 	sint32 currentBindingPointVK{};
 	sint32 currentBufferBindingPointMTL{};
 	sint32 currentTextureBindingPointMTL{};

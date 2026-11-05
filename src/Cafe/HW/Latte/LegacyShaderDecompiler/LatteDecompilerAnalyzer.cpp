@@ -548,6 +548,26 @@ namespace LatteDecompiler
 	}
 #endif
 
+	// BotW PC Edition: motion vectors of every object for frame generation (Vulkan). Vertex shaders without a geometry shader
+	// or stream out, whose uniforms are remapped or in uniform buffers, compute the position of the previous frame as well
+	// (the renderer provides the uniforms of the matching draw of the previous frame); the pixel shaders write the motion
+	// to color output 6 (attached in the scene's G-buffer pass only)
+	void _initPce(LatteDecompilerShaderContext* decompilerContext)
+	{
+		auto& pce = decompilerContext->pce;
+		pce = {};
+		if (g_renderer->GetType() != RendererAPI::Vulkan)
+			return;
+		const auto type = decompilerContext->shaderType;
+		pce.varyings = (type == LatteConst::ShaderType::Vertex || type == LatteConst::ShaderType::Pixel) && !decompilerContext->options->usesGeometryShader &&
+					   LatteSHRC_GetPSInputTable()->count <= 30;
+		const uint8 mode = decompilerContext->shader->uniformMode;
+		pce.prevBody = pce.varyings && type == LatteConst::ShaderType::Vertex && !decompilerContext->analyzer.hasStreamoutEnable &&
+					   (mode == LATTE_DECOMPILER_UNIFORM_MODE_REMAPPED || mode == LATTE_DECOMPILER_UNIFORM_MODE_FULL_CBANK);
+		pce.velocityOut = type == LatteConst::ShaderType::Pixel && (decompilerContext->shader->pixelColorOutputMask & (1 << 6)) == 0;
+		decompilerContext->shader->pceMode = pce.prevBody ? mode : 0;
+	}
+
 	void _initHasUniformVarBlock(LatteDecompilerShaderContext* decompilerContext)
 	{
 		decompilerContext->hasUniformVarBlock = false;
@@ -555,6 +575,8 @@ namespace LatteDecompiler
 			decompilerContext->hasUniformVarBlock = true;
 		else if (decompilerContext->shader->uniformMode == LATTE_DECOMPILER_UNIFORM_MODE_FULL_CFILE)
 			decompilerContext->hasUniformVarBlock = true;
+		if (decompilerContext->pce.prevBody)
+			decompilerContext->hasUniformVarBlock = true; // uf_pce
 
 		bool hasAnyViewportScaleDisabled =
 			!decompilerContext->contextRegistersNew->PA_CL_VTE_CNTL.get_VPORT_X_SCALE_ENA() ||
@@ -674,6 +696,12 @@ namespace LatteDecompiler
 			decompilerContext->currentBindingPointVK++;
 			decompilerContext->output->resourceMappingMTL.tfStorageBindingPoint = decompilerContext->currentBufferBindingPointMTL;
 			decompilerContext->currentBufferBindingPointMTL++;
+		}
+		// BotW PC Edition: uniforms of the previous frame
+		if (decompilerContext->pce.prevBody)
+		{
+			decompilerContext->output->resourceMappingVK.pcePrevBindingPoint = decompilerContext->currentBindingPointVK;
+			decompilerContext->currentBindingPointVK++;
 		}
 	}
 
@@ -1183,6 +1211,7 @@ void LatteDecompiler_analyze(LatteDecompilerShaderContext* shaderContext, LatteD
 #ifdef ENABLE_METAL
 	LatteDecompiler::_initTextureBindingPointsMTL(shaderContext);
 #endif
+	LatteDecompiler::_initPce(shaderContext);
 	LatteDecompiler::_initUniformBindingPoints(shaderContext);
 	LatteDecompiler::_initAttributeBindingPoints(shaderContext);
 	shaderContext->output->resourceMappingMTL.verticesPerInstanceBinding = shaderContext->currentBufferBindingPointMTL++;

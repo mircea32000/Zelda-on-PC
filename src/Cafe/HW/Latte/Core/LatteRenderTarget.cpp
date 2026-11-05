@@ -4,6 +4,7 @@
 #include "Cafe/HW/Latte/Core/Latte.h"
 #include "Cafe/HW/Latte/Core/LatteDraw.h"
 #include "Cafe/HW/Latte/Core/LatteShader.h"
+#include "Cafe/HW/Latte/Core/FetchShader.h"
 #include "Cafe/HW/Latte/Core/LatteOverlay.h"
 #include "pcedition/PCEdition.h"
 #include "pcedition/PCUI.h"
@@ -72,6 +73,10 @@ struct
 		bool hasStencil{false};
 	}depthBuffer;
 }sLatteCurrentRendertargets{};
+
+// BotW PC Edition: framebuffers of the scene's G-buffer pass get a velocity attachment (color 6) while frame generation
+// runs: depth buffer of TV size, several color targets, color 6 free (LatteRenderTarget.cpp, FSR inputs)
+bool LatteFSR_WantsVelocity(LatteTextureView* const* color, LatteTextureView* depth);
 
 LatteCachedFBO::LatteCachedFBO(uint64 key) : key(key)
 {
@@ -185,6 +190,12 @@ void LatteMRT::ApplyCurrentState()
 		{
 			fboLookupView = sLatteCurrentRendertargets.depthBuffer.view;
 		}
+		// (BotW PC Edition: with or without the velocity attachment)
+		LatteTextureView* colors[8];
+		for (sint32 i = 0; i < 8; i++)
+			colors[i] = sLatteCurrentRendertargets.colorBuffer[i].view;
+		if (LatteFSR_WantsVelocity(colors, sLatteCurrentRendertargets.depthBuffer.view))
+			key ^= 0x5CE1A1D0F00D0001ull;
 	}
 	// use fboLookupTexture to find cached FBO
 	if (fboLookupView == nullptr)
@@ -920,6 +931,7 @@ namespace
 		bool reset = true;
 		float lastPos[3]{};
 		uint32 debugFlags = 0;
+		bool objectMotion = true; // motion vectors of every object (velocity attachment), dev switch
 		// displayed frame rate (FSR swapchain present count)
 		uint64 statStart = 0, statPresents = 0;
 		float shownFps = 0.0f;
@@ -1003,6 +1015,112 @@ namespace
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// BotW PC Edition dev tool (frame generation research): the draws of the scene G-buffer pass over several frames, one
+// line each: frame, shaders, index / vertex buffers and every uniform block of the vertex shader (slot:address:size:hash).
+// At each frame boundary the blocks of the frame before are hashed again ("R" lines): still the same one frame later?
+// ---------------------------------------------------------------------------------------------------------------------
+namespace
+{
+	struct
+	{
+		int framesLeft = 0;
+		int frame = 0;
+		bool armed = false;
+		std::string path;
+		std::vector<std::string> lines;
+		std::map<std::pair<MPTR, uint32>, uint64> used, usedBefore; // blocks of this frame / the frame before, hash at use
+	} s_fgTrace;
+
+	uint64 FgHash(MPTR addr, uint32 size)
+	{
+		const uint8* p = memory_base + addr;
+		uint64 h = 1469598103934665603ull;
+		for (uint32 i = 0; i < size; i++)
+			h = (h ^ p[i]) * 1099511628211ull;
+		return h;
+	}
+
+	void FgTraceFrameBoundary()
+	{
+		if (s_fgTrace.armed)
+		{
+			s_fgTrace.armed = false;
+			s_fgTrace.frame = 0;
+			s_fgTrace.lines.clear();
+			s_fgTrace.used.clear();
+			s_fgTrace.usedBefore.clear();
+			return;
+		}
+		if (s_fgTrace.framesLeft <= 0)
+			return;
+		// the blocks of the frame before this one: same content now (at the end of this frame on the GPU)?
+		int same = 0, changed = 0, sameCur = 0, changedCur = 0;
+		for (auto& [k, h] : s_fgTrace.usedBefore)
+			(FgHash(k.first, k.second) == h ? same : changed)++;
+		for (auto& [k, h] : s_fgTrace.used)
+			(FgHash(k.first, k.second) == h ? sameCur : changedCur)++;
+		s_fgTrace.lines.push_back(fmt::format("R {} before: same {} changed {} | this frame: same {} changed {}", s_fgTrace.frame, same, changed, sameCur, changedCur));
+		s_fgTrace.usedBefore = std::move(s_fgTrace.used);
+		s_fgTrace.used.clear();
+		s_fgTrace.frame++;
+		if (--s_fgTrace.framesLeft == 0)
+		{
+			std::ofstream f(_utf8ToPath(s_fgTrace.path), std::ios::trunc);
+			for (auto& l : s_fgTrace.lines)
+				f << l << "\n";
+			s_fgTrace.lines.clear();
+		}
+	}
+}
+
+void LatteFgTrace_Request(const std::string& path, int frames)
+{
+	s_fgTrace.path = path;
+	s_fgTrace.framesLeft = frames;
+	s_fgTrace.armed = true;
+}
+
+void LatteFgTrace_OnDraw(uint32 baseVertex, uint32 instanceCount, uint32 count, MPTR indexData)
+{
+	if (s_fgTrace.framesLeft <= 0 || s_fgTrace.armed) [[likely]]
+		return;
+	LatteTextureView* d = LatteMRT::GetDepthAttachment();
+	if (!d || !LatteMRT::GetColorAttachment(1) || !s_fsr.tvW || d->baseTexture->width != s_fsr.tvW || d->baseTexture->height != s_fsr.tvH)
+		return;
+	auto* vs = LatteSHRC_GetActiveVertexShader();
+	auto* ps = LatteSHRC_GetActivePixelShader();
+	MPTR vb0 = 0;
+	if (auto* fetch = LatteSHRC_GetActiveFetchShader(); fetch && !fetch->bufferGroups.empty())
+		vb0 = LatteGPUState.contextRegister[mmSQ_VTX_ATTRIBUTE_BLOCK_START + fetch->bufferGroups[0].attributeBufferIndex * 7 + 0];
+	std::string l = fmt::format("{} vs={:016x} ps={:016x} ib={:08x} n={} inst={} bv={} vb={:08x} mode={} gs={} so={} |",
+		s_fgTrace.frame, vs ? vs->baseHash : 0, ps ? ps->baseHash : 0, indexData, count, instanceCount, baseVertex, vb0,
+		vs ? (int)vs->uniformMode : -1, LatteSHRC_GetActiveGeometryShader() ? 1 : 0, vs && vs->hasStreamoutBufferWrite ? 1 : 0);
+	if (vs)
+	{
+		for (const auto& buf : vs->list_quickBufferList)
+		{
+			const MPTR addr = LatteGPUState.contextRegister[mmSQ_VTX_UNIFORM_BLOCK_START + buf.index * 7 + 0];
+			const uint32 size = std::min<uint32>(LatteGPUState.contextRegister[mmSQ_VTX_UNIFORM_BLOCK_START + buf.index * 7 + 1] + 1, buf.size);
+			const uint64 h = addr ? FgHash(addr, size) : 0;
+			if (addr)
+				s_fgTrace.used[{addr, size}] = h;
+			l += fmt::format(" {}:{:08x}:{}:{:08x}", buf.index, addr, size, (uint32)(h ^ (h >> 32)));
+		}
+	}
+	s_fgTrace.lines.push_back(std::move(l));
+}
+
+bool LatteFSR_WantsVelocity(LatteTextureView* const* color, LatteTextureView* depth)
+{
+	if (!g_latteFsrActive || !s_fsr.objectMotion || !depth || !color[1] || color[6] || !s_fsr.tvW)
+		return false;
+	return depth->baseTexture->width == s_fsr.tvW && depth->baseTexture->height == s_fsr.tvH;
+}
+
+void LattePce_OnFrameEnd(); // VulkanPce.cpp
+std::string LattePce_Stats();
 
 void LatteFSR_OnDraw(bool isFirstOfPass)
 {
@@ -1256,6 +1374,19 @@ std::string LatteFSR_Command(const std::vector<std::string>& a)
 		s_fsr.mvFlags = (uint32)std::stoul(a[2], nullptr, 0);
 		return "ok";
 	}
+	if (a.size() > 1 && a[1] == "pce")
+		return LattePce_Stats();
+	if (a.size() > 2 && a[1] == "pcemode")
+	{
+		extern void LattePce_SetDevMode(int mode);
+		LattePce_SetDevMode(std::stoi(a[2]));
+		return "ok";
+	}
+	if (a.size() > 2 && a[1] == "objects")
+	{
+		s_fsr.objectMotion = a[2] != "0";
+		return "ok";
+	}
 	if (a.size() > 2 && a[1] == "force")
 	{
 		s_fsr.devForce = a[2] != "0";
@@ -1473,7 +1604,10 @@ void LatteRenderTarget_copyToBackbuffer(LatteTextureView* textureView, bool isPa
 	if (!isPadView)
 	{
 		TraceFrameBoundary();
+		FgTraceFrameBoundary();
 		LatteFSR_OnFrameEnd(textureView);
+		if (g_renderer->GetType() == RendererAPI::Vulkan)
+			LattePce_OnFrameEnd();
 	}
 	if (!isPadView)
 	{

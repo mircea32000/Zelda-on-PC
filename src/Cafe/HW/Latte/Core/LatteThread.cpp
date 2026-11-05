@@ -125,7 +125,7 @@ int Latte_ThreadEntry()
 	LatteTiming_Init();
 	LatteTexture_init();
 	LatteTC_Init();
-	LatteBufferCache_init(164 * 1024 * 1024);
+	LatteBufferCache_init(384 * 1024 * 1024);
 	LatteQuery_Init();
 	LatteSHRC_Init();
 	LatteStreamout_InitCache();

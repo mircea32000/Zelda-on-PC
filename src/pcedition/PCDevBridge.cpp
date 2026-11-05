@@ -11,6 +11,7 @@
 #include "pcedition/PCProfiler.h"
 #include "pcedition/PCGraphics.h"
 #include "pcedition/PCMapIcons.h"
+#include "pcedition/PCLauncher.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -45,6 +46,9 @@
 
 void LatteFrameGen_GetStats(float& baseFps, float& shownFps, bool& generating); // LatteRenderTarget.cpp
 void LatteFrameGen_GetPacing(double& meanMs, double& stdMs, double& p95Ms);
+std::string LatteFrameGen_Info();
+extern uint32 g_pceFrameGenDebug; // VulkanFrameGen.cpp
+void LatteFgTrace_Request(const std::string& path, int frames);
 void LatteFrameTrace_Request(const std::string& path);
 std::string LatteFSR_Command(const std::vector<std::string>& a);
 
@@ -567,6 +571,11 @@ namespace pce::DevBridge
 				}
 				if (c == "fsr")
 					return LatteFSR_Command(a);
+				if (c == "fgtrace" && a.size() > 2)
+				{
+					LatteFgTrace_Request(a[1], (int)u(2)); // fgtrace <file> <frames>: G-buffer draws over several frames
+					return "ok";
+				}
 				if (c == "frametrace" && a.size() > 1)
 				{
 					LatteFrameTrace_Request(a[1]);
@@ -742,6 +751,8 @@ namespace pce::DevBridge
 				}
 				if (c == "motion")
 					return Input::MotionInfo();
+				if (c == "launcher")
+					return Launcher::DebugCommand(a, line);
 				if (c == "overlay")
 				{
 					Overlay::SetOpen(u(1) != 0);

@@ -20,6 +20,8 @@ namespace pce::Graphics
 	const std::vector<std::string>& GetAspectOptions();
 	// the resolutions of an aspect ratio (same number of entries and the same heights for all of them)
 	const std::vector<ResolutionOption>& GetResolutionOptions(int aspect = 1);
+	bool IsUltrawideAspect(int aspect);
+	int MapResolutionForAspect(int oldAspect, int oldPreset, int newAspect);
 	// The picture inside the game window (it has bars when the window has another shape), in pixels of the window's
 	// client area. false while there is no picture yet.
 	bool GetPictureArea(int& x, int& y, int& width, int& height, int& windowWidth, int& windowHeight);

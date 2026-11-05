@@ -1,6 +1,18 @@
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h"
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanAPI.h"
 #include "Cafe/HW/Latte/Renderer/Vulkan/CachedFBOVk.h"
+#include "Cafe/HW/Latte/Renderer/Vulkan/VulkanPce.h"
+
+bool LatteFSR_WantsVelocity(LatteTextureView* const* color, LatteTextureView* depth); // LatteRenderTarget.cpp
+
+void CachedFBOVk::InitVelocity()
+{
+	LatteTextureView* colors[8];
+	for (int i = 0; i < 8; ++i)
+		colors[i] = colorBuffer[i].texture;
+	if (LatteFSR_WantsVelocity(colors, depthBuffer.texture))
+		m_pceVelocityView = VulkanPce::GetVelocityView((uint32)m_size.x, (uint32)m_size.y);
+}
 
 void CachedFBOVk::CreateRenderPass()
 {
@@ -13,6 +25,11 @@ void CachedFBOVk::CreateRenderPass()
 		if (!textureViewVk)
 		{
 			attachmentInfo.colorAttachment[i].viewObj = nullptr;
+			if (i == 6 && m_pceVelocityView)
+			{
+				attachmentInfo.colorAttachment[i].viewObj = m_pceVelocityView;
+				attachmentInfo.colorAttachment[i].format = VulkanPce::kVelocityFormat;
+			}
 			continue;
 		}
 		// setup color attachment
@@ -56,7 +73,7 @@ VKRObjectTextureView* CachedFBOVk::GetColorBufferImageView(uint32 index)
 	auto& cb = colorBuffer[index];
 	auto textureViewVk = (LatteTextureViewVk*)cb.texture;
 	if (!textureViewVk)
-		return nullptr;
+		return index == 6 ? m_pceVelocityView : nullptr;
 	auto viewDim = textureViewVk->dim;
 	if (viewDim == Latte::E_DIM::DIM_3D)
 		viewDim = Latte::E_DIM::DIM_2D; // bind 3D texture slices as 2D images
@@ -120,7 +137,7 @@ void CachedFBOVk::InitDynamicRenderingData()
 		VKRObjectTextureView* cbView = GetColorBufferImageView(i);
 
 		auto& buffer = colorBuffer[i];
-		if (!cbView)
+		if (!cbView || !buffer.texture) // (the velocity attachment is not used with dynamic rendering)
 		{
 			m_vkColorAttachments[i].imageView = VK_NULL_HANDLE;
 			continue;

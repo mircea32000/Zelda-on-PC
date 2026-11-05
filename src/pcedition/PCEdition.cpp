@@ -6,6 +6,7 @@
 #include "pcedition/PCUI.h"
 #include "pcedition/PCPrompts.h"
 #include "pcedition/PCIcon.h"
+#include "pcedition/PCLauncher.h"
 
 #if BOOST_OS_WINDOWS
 #include <windows.h>
@@ -259,6 +260,60 @@ namespace pce
 		bool IsGameRegion(uint32 low)
 		{
 			return low == 0x101C9500 || low == 0x101C9400 || low == 0x101C9300;
+		}
+
+		uint64 sBasePlayTimeSeconds = 0;
+		double sSessionPlayTimeSec = 0.0;
+		double sLastSavedSessionSec = 0.0;
+
+		// Read BotW's internal PlayReport_PlayTime (CRC32 = 0x73C29681) from game_data.sav files.
+		// Each game_data.sav starts with a 12-byte header followed by 8-byte big-endian (crc32, value) pairs.
+		uint64 ScanSaveDirPlayTime(const fs::path& saveUserDir)
+		{
+			std::error_code ec;
+			if (!fs::is_directory(saveUserDir, ec))
+				return 0;
+			uint64 best = 0;
+			for (auto it = fs::recursive_directory_iterator(saveUserDir, ec); it != fs::recursive_directory_iterator(); it.increment(ec))
+			{
+				if (ec || !it->is_regular_file(ec) || it->path().filename() != "game_data.sav")
+					continue;
+				std::ifstream f(it->path(), std::ios::binary);
+				if (!f)
+					continue;
+				f.seekg(0, std::ios::end);
+				std::streamoff sz = f.tellg();
+				if (sz < 20)
+					continue;
+				f.seekg(12, std::ios::beg);
+				std::vector<uint8> buf((size_t)(sz - 12));
+				if (!f.read((char*)buf.data(), (std::streamsize)buf.size()))
+					continue;
+				for (size_t off = 0; off + 8 <= buf.size(); off += 8)
+				{
+					uint32 crc = ((uint32)buf[off] << 24) | ((uint32)buf[off + 1] << 16) | ((uint32)buf[off + 2] << 8) | (uint32)buf[off + 3];
+					if (crc == 0x73C29681u)
+					{
+						uint32 val = ((uint32)buf[off + 4] << 24) | ((uint32)buf[off + 5] << 16) | ((uint32)buf[off + 6] << 8) | (uint32)buf[off + 7];
+						if (val <= 3600u * 10000u && val > best)
+							best = val;
+					}
+				}
+			}
+			return best;
+		}
+
+		uint64 ReadSavePlayTimeSeconds()
+		{
+			uint64 best = 0;
+			for (const char* reg : {"101c9500", "101c9400", "101c9300"})
+			{
+				const fs::path rel = fs::path("usr/save/00050000") / reg / "user";
+				best = std::max(best, ScanSaveDirPlayTime(ActiveSettings::GetMlcPath() / rel));
+				if (sDevMode)
+					best = std::max(best, ScanSaveDirPlayTime(sExeDir / "data" / "mlc01" / rel));
+			}
+			return best;
 		}
 
 		fs::path RoamingAppData()
@@ -689,10 +744,16 @@ namespace pce
 			cemuLog_log(LogType::Force, "PCE: game not found");
 		ForceCemuConfig();
 		ImportExistingSave();
+		uint64 saveSec = ReadSavePlayTimeSeconds();
+		sBasePlayTimeSeconds = std::max(GetSettings().playTimeSeconds, saveSec);
+		if (sBasePlayTimeSeconds != GetSettings().playTimeSeconds)
+			UpdateSettings([&](Settings& s) { s.playTimeSeconds = sBasePlayTimeSeconds; });
 		Input::RegisterHLE();
 		UI::RegisterHLE();
 		Prompts::LoadGuideLanguage();
 		Graphics::PrepareGraphicPacks();
+		if (!sDevMode)
+			Launcher::StartUpdateCheck(false);
 	}
 
 	void ReapplyForcedConfig()
@@ -711,6 +772,9 @@ namespace pce
 
 	void Shutdown()
 	{
+		uint64 total = std::max(GetPlayTimeSeconds(), ReadSavePlayTimeSeconds());
+		if (total > GetSettings().playTimeSeconds)
+			UpdateSettings([&](Settings& s) { s.playTimeSeconds = total; });
 		DevBridge::Stop();
 		Input::Shutdown();
 	}
@@ -805,6 +869,49 @@ namespace pce
 	bool IsGameAvailable()
 	{
 		return !sBase.empty();
+	}
+
+	void TickPlayTime(double dt)
+	{
+		if (dt <= 0.0)
+			return;
+		sSessionPlayTimeSec += std::min(dt, 1.0);
+		if (sSessionPlayTimeSec - sLastSavedSessionSec >= 30.0)
+		{
+			sLastSavedSessionSec = sSessionPlayTimeSec;
+			uint64 total = sBasePlayTimeSeconds + (uint64)sSessionPlayTimeSec;
+			UpdateSettings([total](Settings& s) {
+				if (total > s.playTimeSeconds)
+					s.playTimeSeconds = total;
+			});
+		}
+	}
+
+	uint64 GetPlayTimeSeconds()
+	{
+		uint64 live = sBasePlayTimeSeconds + (uint64)sSessionPlayTimeSec;
+		return std::max(GetSettings().playTimeSeconds, live);
+	}
+
+	std::string FormatPlayTime(bool includeSeconds)
+	{
+		uint64 total = GetPlayTimeSeconds();
+		uint64 h = total / 3600;
+		uint64 m = (total % 3600) / 60;
+		uint64 s = total % 60;
+		if (includeSeconds)
+		{
+			if (h > 0)
+				return fmt::format("{}h {:02d}m {:02d}s", h, m, s);
+			if (m > 0)
+				return fmt::format("{}m {:02d}s", m, s);
+			return fmt::format("{}s", s);
+		}
+		if (h > 0)
+			return fmt::format("{}h {:02d}m", h, m);
+		if (m > 0)
+			return fmt::format("{}m", m);
+		return fmt::format("{}s", s);
 	}
 
 	void FatalError(const std::string& message)

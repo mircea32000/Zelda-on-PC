@@ -9,6 +9,7 @@ public:
 	CachedFBOVk(uint64 key, VkDevice device)
 		: LatteCachedFBO(key), m_device(device)
 	{
+		InitVelocity();
 		CreateRenderPass();
 		CreateFramebuffer();
 		InitDynamicRenderingData();
@@ -51,6 +52,9 @@ public:
 
 	[[nodiscard]] const VkExtent2D& GetExtend() const { return m_extend;}
 
+	// BotW PC Edition: velocity attachment (color 6) of the scene's G-buffer pass, null if none
+	VKRObjectTextureView* GetVelocityView() const { return m_pceVelocityView; }
+
 	struct RendertargetSelfDependencyMask
 	{
 		VkImageAspectFlags aspectMaskFlags{}; // aspect flags which are simultaneously sampled and written
@@ -77,6 +81,7 @@ public:
 
 private:
 
+	void InitVelocity();
 	void CreateRenderPass();
 	void CreateFramebuffer();
 
@@ -86,6 +91,7 @@ private:
 	VKRObjectTextureView* GetDepthStencilBufferImageView(bool& hasStencil);
 
 	VkDevice m_device;
+	VKRObjectTextureView* m_pceVelocityView{};
 	VKRObjectRenderPass* m_vkrObjRenderPass{};
 	VKRObjectFramebuffer* m_vkrObjFramebuffer{};
 

@@ -1613,7 +1613,7 @@ namespace pce::MapIcons
 		const UI::PointerSnapshot& ps = UI::GetPointer(frame);
 
 		static bool sWasMapOpen = false;
-		if (!st.map || !ps.hasMap)
+		if (!st.map || !ps.hasMap || ps.mapBlocked)
 		{
 			sWasMapOpen = false;
 			if (sSearchFocused)
@@ -2274,7 +2274,7 @@ namespace pce::MapIcons
 			mf.hasPose = Input::GetPlayerPose(mf.px, mf.py, mf.pz, mf.camYaw);
 		}
 		const UI::MinimapInfo& minfo = mf.info;
-		if (!mf.hasPose && !minfo.hasMapTransform)
+		if (!minfo.visible || !minfo.hasMapTransform)
 			return;
 		// the point the game's map is centred on (its own, so the icons move with the map exactly), else Link's
 		const float px = minfo.hasMapTransform ? minfo.mapCenterX : mf.px;

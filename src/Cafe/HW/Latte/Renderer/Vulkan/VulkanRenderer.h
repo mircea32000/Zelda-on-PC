@@ -145,7 +145,7 @@ class VulkanRenderer : public Renderer
 
 	using VSync = SwapchainInfoVk::VSync;
 
-	static const inline int UNIFORMVAR_RINGBUFFER_SIZE = 1024 * 1024 * 16; // 16MB
+	static const inline int UNIFORMVAR_RINGBUFFER_SIZE = 1024 * 1024 * 64; // 64MB (BotW PC Edition: two frames are kept, see m_pceUniformHold)
 
 	static const inline int TEXTURE_READBACK_SIZE = 32 * 1024 * 1024; // 32 MB
 
@@ -634,6 +634,7 @@ private:
 	uint8* m_uniformVarBufferPtr = nullptr;
 	uint32 m_uniformVarBufferWriteIndex = 0;
 	uint32 m_uniformVarBufferReadIndex = 0;
+	uint32 m_pceUniformHold = 0; // (BotW PC Edition) write index at the start of this frame
 
 	// transform feedback ringbuffer
 	VkBuffer m_xfbRingBuffer = VK_NULL_HANDLE;
@@ -975,6 +976,10 @@ public:
 	bool IsDebugMarkersEnabled() const { return m_featureControl.usingDebugMarkerTool; }
 	bool IsTracingToolEnabled() const { return m_featureControl.usingTracingTool; }
 	bool UseAttachmentFeedbackLoop() const { return m_featureControl.deviceExtensions.attachment_feedback_loop_dynamic_state; }
+
+	// BotW PC Edition: the uniform ring buffer keeps a frame's data until the command buffers of the next frame are done
+	// (the motion vectors read the previous frame's uniforms there)
+	void PCE_OnFrameEnd() { m_pceUniformHold = m_uniformVarBufferWriteIndex; }
 
 private:
 

@@ -8,6 +8,7 @@
 #include "pcedition/PCKeys.h"
 #include "pcedition/PCPrompts.h"
 #include "pcedition/PCMapIcons.h"
+#include "pcedition/PCLauncher.h"
 
 #if BOOST_OS_WINDOWS
 #include <windows.h>
@@ -237,6 +238,8 @@ namespace pce::Overlay
 			if (!sAudioDeviceIds.empty())
 				sEdit.audioDevice = sAudioDeviceIds[std::clamp(sAudioDeviceIndex, 0, (int)sAudioDeviceIds.size() - 1)];
 			const Settings old = GetSettings();
+			if (old.aspectRatio != sEdit.aspectRatio)
+				sEdit.resolutionPreset = Graphics::MapResolutionForAspect(old.aspectRatio, sEdit.resolutionPreset, sEdit.aspectRatio);
 			Settings copy = sEdit;
 			UpdateSettings([&](Settings& s) { s = copy; });
 			const bool gfxChanged = old.fpsLimit != copy.fpsLimit || old.vsync != copy.vsync ||
@@ -387,6 +390,7 @@ namespace pce::Overlay
 				p.items.push_back(toggle("Toggle Lock On / Shield", &sEdit.toggleShield, "On: press the Lock On key once to keep the shield raised and the target locked, press it again to lower it. Off: hold the key. Crouching is always a toggle in the game."));
 				p.items.push_back(slider("Weapon Wheel Delay", &sEdit.wheelReleaseDelayMs, 150.0f, 1200.0f, 25.0f, "%.0f ms", "How long the weapon selector stays open after the last mouse wheel step."));
 				p.items.push_back(toggle("Selectors: Move Keys", &sEdit.selectorMoveKeys, "On: while a weapon, bow, shield or rune selector is open, the Move Left / Move Right keys step through it. The mouse and the wheel keep working."));
+				p.items.push_back(toggle("Selectors: Invert Scroll", &sEdit.selectorInvertScroll, "On: scrolling the mouse wheel up moves right and scrolling down moves left in the weapon, bow, shield, arrow, and rune selectors. Off: wheel up moves left, wheel down moves right."));
 				p.items.push_back(toggle("Inventory: Move Keys", &sEdit.inventoryMoveKeys, "On: Move Left / Move Right move the cursor in the inventory, like Move Forward / Back do. The pages (Adventure Log, Inventory, System) are then switched with the Inventory: Previous / Next Page keys (Controls). Off: Move Left / Move Right switch the pages."));
 				pages.push_back(std::move(p));
 			}
@@ -447,7 +451,7 @@ namespace pce::Overlay
 				for (auto& r : Graphics::GetResolutionOptions(aspect))
 					res.push_back(r.label);
 				p.items.push_back(choice("Resolution", &sEdit.resolutionPreset, res, "Internal rendering resolution. Applied on next launch.", true));
-				if (aspect >= 3)
+				if (Graphics::IsUltrawideAspect(aspect))
 					p.items.push_back(choice("Ultrawide HUD", &sEdit.ultrawideHud, {"At the screen edges", "Centred"},
 											 "Where hearts, map and prompts are on an ultrawide picture: at its edges, or within a 16:9 area "
 											 "in the middle. Applied on next launch.", true));
@@ -515,8 +519,21 @@ namespace pce::Overlay
 										 "Shows interactive markers, item search and category filters directly on the Sheikah Slate world map."));
 				p.items.push_back(toggle("Minimap Markers", &sEdit.mapMinimap,
 										 "Shows nearby interactive map markers directly on the HUD minimap compass during gameplay."));
+				p.items.push_back(choice("Minimap Zoom", &sEdit.minimapZoom, {"Automatic", "Close", "Normal", "Wide", "Region"},
+										 "Zoom level of the HUD minimap compass during gameplay. Automatic: zoomed in inside towns, normal on foot, "
+										 "wide while riding a horse or the Master Cycle Zero."));
 				p.items.push_back(toggle("Map: Auto-Hide Claimed", &sEdit.mapAutoHide,
 										 "Automatically hides opened treasure chests, completed shrines, activated towers and collected Korok seeds."));
+				p.items.push_back(header("Updates"));
+				p.items.push_back(toggle("Automatic Updates", &sEdit.autoUpdate,
+										 "On: new PC Edition releases from GitHub are downloaded, verified (SHA-256) and installed automatically in the launcher without any setup prompts."));
+				p.items.push_back(button("Check for Updates",
+										 "Checks GitHub for a newer release of the PC Edition and installs it automatically if available.",
+										 []() {
+											 Launcher::StartUpdateCheck(true);
+											 auto st = Launcher::GetUpdateState();
+											 Toast(st.statusText.empty() ? "Checking GitHub for updates..." : st.statusText);
+										 }));
 				p.items.push_back(header("amiibo"));
 				p.items.push_back(button("Add amiibo File...", "Copies the .bin file of an amiibo (a dump of your figure) into the game's amiibo folder. "
 															   "When the amiibo rune looks for an amiibo, you choose one of them. The rune is turned on in the "
@@ -1711,7 +1728,7 @@ namespace pce::Overlay
 				TextAligned(dl, sFonts.small, fs * 0.72f, bottomLine, (kAccent & 0x00FFFFFF) | (230u << 24), "Some changes apply after restarting", 0.0f);
 			else
 				TextAligned(dl, sFonts.small, fs * 0.72f, bottomLine, (kTextDim & 0x00FFFFFF) | (180u << 24),
-							std::string("PC Edition ") + kEditionVersion, 0.0f);
+							std::string("PC Edition ") + kEditionVersion + "   \xE2\x80\xA2   Play Time: " + FormatPlayTime(), 0.0f);
 			if (Input::EmbeddedFocus())
 				DrawGuide(dl, area.Max.x - fs * 0.6f, area.Max.y - guideH, fs, 1.0f, ListGuide());
 			else
@@ -1950,6 +1967,7 @@ namespace pce::Overlay
 			DrawTiltIndicator(now);
 		const float dt = sLastTime > 0 ? (float)std::min(0.1, now - sLastTime) : 0.016f;
 		sLastTime = now;
+		TickPlayTime(dt);
 		if (sOpenRequest.exchange(false))
 			SetOpen(true);
 		if (RenderAmiibo(now))
@@ -2044,7 +2062,7 @@ namespace pce::Overlay
 		// header
 		SheikahEye(dl, ImVec2(p0.x + fs * 2.0f, p0.y + fs * 1.6f), fs * 0.9f, alpha(kAccent), (float)now);
 		dl->AddText(sFonts.title, fs * 1.45f, ImVec2(p0.x + fs * 3.6f, p0.y + fs * 0.85f), alpha(kText), "Settings");
-		const std::string verText = std::string("PC Edition ") + kEditionVersion;
+		const std::string verText = std::string("PC Edition ") + kEditionVersion + "   \xE2\x80\xA2   Play Time: " + FormatPlayTime();
 		const ImVec2 titleSize = sFonts.title->CalcTextSizeA(fs * 1.45f, FLT_MAX, 0.0f, "Settings");
 		dl->AddText(sFonts.small, fs * 0.75f, ImVec2(p0.x + fs * 3.9f + titleSize.x, p0.y + fs * 1.35f), alpha(kTextDim, 0.75f), verText.c_str());
 		DrawTabs(dl, p1.x - fs * 1.0f, p0.y + fs * 1.05f, fs, a, sOpen.load(), false, 0.0f);

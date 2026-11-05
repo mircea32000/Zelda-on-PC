@@ -249,17 +249,22 @@ namespace pce::Graphics
 		// select the first preset of a category whose name starts with the given prefix
 		bool SelectPreset(const std::shared_ptr<GraphicPack2>& gp, const std::string& category, const std::string& namePrefix, bool* changed = nullptr)
 		{
-			for (auto& p : gp->GetPresets())
+			for (int pass = 0; pass < 2; pass++)
 			{
-				if (p->category == category && boost::istarts_with(p->name, namePrefix))
+				for (auto& p : gp->GetPresets())
 				{
-					if (gp->GetActivePreset(category) != p->name)
+					if (pass == 0 && !p->visible)
+						continue;
+					if (p->category == category && boost::istarts_with(p->name, namePrefix))
 					{
-						gp->SetActivePreset(category, p->name, false);
-						if (changed)
-							*changed = true;
+						if (gp->GetActivePreset(category) != p->name)
+						{
+							gp->SetActivePreset(category, p->name, true);
+							if (changed)
+								*changed = true;
+						}
+						return true;
 					}
-					return true;
 				}
 			}
 			cemuLog_log(LogType::Force, "PCE: preset '{}' / '{}' not found in {}", category, namePrefix, gp->GetName());
@@ -741,10 +746,10 @@ blr
 				const int ri = std::clamp(s.resolutionPreset, 0, (int)res.size() - 1);
 				if (!live)
 				{
-					static const char* kAspect[] = {"16:9", "16:9", "16:10", "21:9", "32:9"};
+					static const char* kAspect[] = {"16:9", "16:9", "16:10", "21:9", "32:9", "4:3", "5:4", "3:2", "32:10", "48:9"};
 					SelectPreset(gfx, "Aspect Ratio", kAspect[aspect], gfxChanged);
 					SelectPreset(gfx, "Resolution", fmt::format("{}x{}", res[ri].width, res[ri].height), gfxChanged);
-					if (aspect >= 3)
+					if (IsUltrawideAspect(aspect))
 						SelectPreset(gfx, "Ultrawide HUD Mode", s.ultrawideHud == 1 ? "Centered HUD" : "Edge HUD", gfxChanged);
 					cemuLog_log(LogType::Force, "PCE: aspect ratio {} (setting {}), resolution {}x{}", kAspect[aspect], s.aspectRatio, res[ri].width, res[ri].height);
 					static const char* kShadow[] = {"Low", "Medium", "High", "Ultra"};
@@ -812,7 +817,7 @@ blr
 
 	int EffectiveAspect(int setting)
 	{
-		if (setting >= 1 && setting <= 4)
+		if (setting >= 1 && setting <= 9)
 			return setting;
 		// automatic: the shape of the main display
 		int w = 1920, h = 1080;
@@ -824,34 +829,91 @@ blr
 		return ratio > 3.2 ? 4 : (ratio > 2.2 ? 3 : 1); // 32:9 = 3.56, 21:9 = 2.33 - 2.39, 16:9 = 1.78
 	}
 
+	bool IsUltrawideAspect(int aspect)
+	{
+		const int eff = EffectiveAspect(aspect);
+		return eff == 3 || eff == 4 || eff == 8 || eff == 9;
+	}
+
 	const std::vector<std::string>& GetAspectOptions()
 	{
-		static const std::vector<std::string> r = {"Automatic", "16:9", "16:10", "21:9 (ultrawide)", "32:9 (super ultrawide)"};
+		static const std::vector<std::string> r = {
+			"Automatic", "16:9", "16:10", "21:9 (ultrawide)", "32:9 (super ultrawide)", "4:3", "5:4", "3:2", "32:10", "48:9"
+		};
 		return r;
 	}
 
 	const std::vector<ResolutionOption>& GetResolutionOptions(int aspect)
 	{
-		// (resolutions the community graphics pack has for each aspect ratio)
+		// (resolutions the community graphics pack has for each aspect ratio, including low-spec and high-res presets)
 		static const std::vector<ResolutionOption> r16_9 = {
-			{1280, 720, "1280 x 720"}, {1920, 1080, "1920 x 1080"}, {2560, 1440, "2560 x 1440"}, {3200, 1800, "3200 x 1800"}, {3840, 2160, "3840 x 2160"},
+			{320, 180, "320 x 180"}, {640, 360, "640 x 360"}, {960, 540, "960 x 540"},
+			{1280, 720, "1280 x 720"}, {1600, 900, "1600 x 900"}, {1920, 1080, "1920 x 1080"},
+			{2560, 1440, "2560 x 1440"}, {3200, 1800, "3200 x 1800"}, {3840, 2160, "3840 x 2160"},
+			{5120, 2880, "5120 x 2880"}, {7680, 4320, "7680 x 4320"},
 		};
 		static const std::vector<ResolutionOption> r16_10 = {
-			{1280, 800, "1280 x 800"}, {1920, 1200, "1920 x 1200"}, {2560, 1600, "2560 x 1600"}, {2880, 1800, "2880 x 1800"}, {3840, 2400, "3840 x 2400"},
+			{1280, 800, "1280 x 800"}, {1440, 900, "1440 x 900"}, {1680, 1050, "1680 x 1050"},
+			{1920, 1200, "1920 x 1200"}, {2560, 1600, "2560 x 1600"}, {2880, 1800, "2880 x 1800"},
+			{3840, 2400, "3840 x 2400"}, {5120, 3200, "5120 x 3200"},
 		};
 		static const std::vector<ResolutionOption> r21_9 = {
-			{1720, 720, "1720 x 720"}, {2560, 1080, "2560 x 1080"}, {3440, 1440, "3440 x 1440"}, {4300, 1800, "4300 x 1800"}, {5120, 2160, "5120 x 2160"},
+			{1720, 720, "1720 x 720"}, {2100, 900, "2100 x 900"}, {2560, 1080, "2560 x 1080"},
+			{3440, 1440, "3440 x 1440"}, {3840, 1600, "3840 x 1600"}, {4300, 1800, "4300 x 1800"},
+			{5120, 2160, "5120 x 2160"}, {6880, 2880, "6880 x 2880"},
 		};
 		static const std::vector<ResolutionOption> r32_9 = {
-			{3840, 1080, "3840 x 1080 (smallest)"}, {3840, 1080, "3840 x 1080"}, {5120, 1440, "5120 x 1440"}, {5120, 1440, "5120 x 1440 (largest below 2160)"}, {7680, 2160, "7680 x 2160"},
+			{3840, 1080, "3840 x 1080"}, {5120, 1440, "5120 x 1440"}, {7680, 2160, "7680 x 2160"}, {10240, 2880, "10240 x 2880"},
+		};
+		static const std::vector<ResolutionOption> r4_3 = {
+			{800, 600, "800 x 600"}, {1024, 768, "1024 x 768"}, {1280, 960, "1280 x 960"}, {1600, 1200, "1600 x 1200"}, {1920, 1440, "1920 x 1440"},
+		};
+		static const std::vector<ResolutionOption> r5_4 = {
+			{1280, 1024, "1280 x 1024"}, {5760, 1080, "5760 x 1080"}, {8640, 1620, "8640 x 1620"},
+		};
+		static const std::vector<ResolutionOption> r3_2 = {
+			{1080, 720, "1080 x 720"}, {1440, 960, "1440 x 960"}, {1920, 1280, "1920 x 1280"}, {2256, 1504, "2256 x 1504"}, {3240, 2160, "3240 x 2160"},
+		};
+		static const std::vector<ResolutionOption> r32_10 = {
+			{3840, 1200, "3840 x 1200"}, {5760, 1800, "5760 x 1800"}, {7680, 2400, "7680 x 2400"},
+		};
+		static const std::vector<ResolutionOption> r48_9 = {
+			{5760, 1080, "5760 x 1080"}, {7680, 1440, "7680 x 1440"}, {11520, 2160, "11520 x 2160"},
 		};
 		switch (aspect)
 		{
 		case 2: return r16_10;
 		case 3: return r21_9;
 		case 4: return r32_9;
+		case 5: return r4_3;
+		case 6: return r5_4;
+		case 7: return r3_2;
+		case 8: return r32_10;
+		case 9: return r48_9;
 		default: return r16_9;
 		}
+	}
+
+	int MapResolutionForAspect(int oldAspect, int oldPreset, int newAspect)
+	{
+		const auto& oldRes = GetResolutionOptions(EffectiveAspect(oldAspect));
+		const auto& newRes = GetResolutionOptions(EffectiveAspect(newAspect));
+		if (oldRes.empty() || newRes.empty())
+			return 0;
+		const int oldIdx = std::clamp(oldPreset, 0, (int)oldRes.size() - 1);
+		const int targetH = oldRes[oldIdx].height;
+		int bestIdx = 0;
+		int bestDiff = std::abs(newRes[0].height - targetH);
+		for (int i = 1; i < (int)newRes.size(); i++)
+		{
+			const int diff = std::abs(newRes[i].height - targetH);
+			if (diff < bestDiff)
+			{
+				bestDiff = diff;
+				bestIdx = i;
+			}
+		}
+		return bestIdx;
 	}
 
 	bool GetPictureArea(int& x, int& y, int& width, int& height, int& windowWidth, int& windowHeight)

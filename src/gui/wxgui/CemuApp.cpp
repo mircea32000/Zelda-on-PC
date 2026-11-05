@@ -38,6 +38,7 @@
 #include "pcedition/PCEdition.h"
 #include "pcedition/PCGraphics.h"
 #include "pcedition/PCSettings.h"
+#include "pcedition/PCLauncher.h"
 
 wxIMPLEMENT_APP_NO_MAIN(CemuApp);
 
@@ -369,6 +370,9 @@ bool CemuApp::OnInit()
 	CemuCommonInit();
 	if (pce::IsActive())
 	{
+		pce::Graphics::ApplySettingsToPacks();
+		if (!pce::Launcher::Run())
+			exit(0);
 		pce::ReapplyForcedConfig();
 		auto& wxc = GetWxGUIConfig();
 		wxc.check_update = false;

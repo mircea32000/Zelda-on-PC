@@ -27,6 +27,8 @@ add_library(CemuPCEdition
 	PCIcon.h
 	PCMapIcons.cpp
 	PCMapIcons.h
+	PCLauncher.cpp
+	PCLauncher.h
 )
 
 set_property(TARGET CemuPCEdition PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -46,7 +48,7 @@ target_link_libraries(CemuPCEdition PRIVATE
 )
 
 if (WIN32)
-	target_link_libraries(CemuPCEdition PRIVATE ws2_32)
+	target_link_libraries(CemuPCEdition PRIVATE ws2_32 winhttp bcrypt dwmapi)
 else()
 	target_link_libraries(CemuPCEdition PRIVATE ${CMAKE_DL_LIBS})
 endif()

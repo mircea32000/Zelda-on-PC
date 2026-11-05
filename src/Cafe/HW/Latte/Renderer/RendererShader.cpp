@@ -20,6 +20,7 @@ uint32 RendererShader::GeneratePrecompiledCacheId()
 	v += (uint32)g_current_game_profile->GetAccurateShaderMul() * 133;
 
 	v += 0x820a5291; // change this value for manual invalidation
+	v += 0x5ce10001; // BotW PC Edition: motion vectors in the shaders (frame generation)
 
 	return v;
 }

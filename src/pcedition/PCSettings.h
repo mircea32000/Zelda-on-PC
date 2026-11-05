@@ -104,6 +104,7 @@ namespace pce
 		float wheelReleaseDelayMs = 450.0f; // after the last wheel notch, release the selector (equips item)
 		float selectorMouseStep = 60.0f;    // mouse counts per selection step while a selector key is held
 		bool selectorMoveKeys = false;      // Move Left / Right step through an open selector (and do not move Link then)
+		bool selectorInvertScroll = false;  // invert mouse wheel direction in weapon / bow / shield / arrow / rune selectors
 		bool inventoryMoveKeys = false;     // Move Left / Right move the inventory cursor instead of switching its pages
 
 		// tilt (gyro emulation)
@@ -119,7 +120,7 @@ namespace pce
 		float tiltMaxSpeed = 300.0f;        // deg/s the slate turns at most (quicker mouse movement is not used)
 
 		// graphics (applied through graphic packs / renderer)
-		int resolutionPreset = 1;           // index into resolution list
+		int resolutionPreset = 5;           // index into resolution list (5 = 1920 x 1080 for 16:9)
 		int aspectRatio = 0;                // 0 automatic (21:9 / 32:9 on such a display, else 16:9), 1 16:9, 2 16:10, 3 21:9, 4 32:9
 		int ultrawideHud = 0;               // 21:9 / 32:9: 0 HUD at the screen edges, 1 HUD centred (16:9 area)
 		int fpsLimit = 60;                  // 30, 60, 90, 120, 144, 165 or 240 (FPS++ limit)
@@ -149,11 +150,14 @@ namespace pce
 		std::string language = "en";        // text language (code of pce::GetGameLanguages), applied when the game starts
 		int temperatureUnit = 0;            // 0 as the game decides (Fahrenheit for US English), 1 Celsius, 2 Fahrenheit
 		int inventoryPageTurn = 1;          // category clicks / mouse wheel in the inventory: 0 instant, 1 short slide, 2 the game's slide
+		bool autoUpdate = true;             // automatically download and install new releases in the launcher
+		uint64 playTimeSeconds = 0;         // total play time in seconds (synced with save PlayReport_PlayTime + active session)
 
 		// interactive map (Sheikah Slate map overlay)
 		bool mapEnabled = true;             // master toggle: completely enable or disable the interactive map
 		bool mapOverlay = true;             // show the interactive map overlay on the world map
 		bool mapMinimap = true;             // show nearby interactive map markers on the HUD minimap compass
+		int minimapZoom = 0;                // HUD minimap zoom: 0 auto, 1 close (town), 2 normal (on foot), 3 wide (riding), 4 region
 		bool mapPanelOpen = true;           // filter & search panel expanded on the map screen
 		bool mapAutoHide = true;            // auto-hide claimed chests, completed shrines, activated towers, collected koroks
 		bool mapDimClaimed = false;         // when auto-hide is off, dim claimed markers instead of showing at full opacity

@@ -9,6 +9,7 @@
 //    moving objects are left to FSR's optical flow).
 
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanAPI.h"
+#include "Cafe/HW/Latte/Renderer/Vulkan/VulkanPce.h"
 #include <array>
 #include <string>
 
@@ -35,7 +36,8 @@ public:
 	bool CaptureColor(VkCommandBuffer cmd, VkImage color, VkFormat colorFormat, uint32 cw, uint32 ch);
 	// reprojection matrix: clip position in the previous frame = reproj * (ndc x, ndc y, ndc z, 1) of the current one
 	// (row major). flags: 1 = flip y, 2 = depth already in [-1, 1] range mapping (DX clip space: ndc z = depth)
-	void BuildMotionVectors(VkCommandBuffer cmd, const float reproj[16], uint32 flags);
+	// velocity: written by the scene (VulkanPce), may be null
+	void BuildMotionVectors(VkCommandBuffer cmd, const float reproj[16], uint32 flags, const VulkanPce::VelocityImage* velocity);
 	bool HasSnapshot() const { return m_hasSnapshot; }
 	// scales the HUD-less snapshot into the area of the backbuffer that shows the game (same as the real frame), into one of
 	// two images (FSR reads it when presenting). Returns the image (SHADER_READ_ONLY_OPTIMAL)
@@ -73,6 +75,7 @@ private:
 	VkPipeline m_pipeline = VK_NULL_HANDLE;
 	VkDescriptorPool m_pool = VK_NULL_HANDLE;
 	VkDescriptorSet m_set = VK_NULL_HANDLE;
+	VkImageView m_velocityBound = VK_NULL_HANDLE; // in m_set (binding 3), else the depth copy is bound there
 	bool m_pipelineFailed = false;
 
 	std::string m_dumpRequest;

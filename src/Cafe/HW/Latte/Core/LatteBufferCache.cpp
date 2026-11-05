@@ -1022,7 +1022,13 @@ public:
 					// for pages that contain streamout data we do uploads with a much smaller granularity
 					// and skip uploading any data that is marked with streamout filler bytes
 					if (!uploadPageWithStreamoutFiltered(basePageIndex + i))
+					{
 						pageInfo->hasStreamoutData = false; // all streamout data was replaced
+						bool anyStreamout = false;
+						for (const auto& pi : m_pageInfo)
+							if (pi.hasStreamoutData) { anyStreamout = true; break; }
+						m_hasStreamoutData = anyStreamout;
+					}
 				}
 				pagePtr += CACHE_PAGE_SIZE;
 				pageInfo++;
@@ -1445,8 +1451,9 @@ public:
 	}
 
 	// drops everything from the cache that isn't considered in use or unrestorable due to containing streamout data
-	static void CleanupCacheAggressive(MPTR excludedRangeBegin, MPTR excludedRangeEnd)
+	static void CleanupCacheAggressive(MPTR excludedRangeBegin, MPTR excludedRangeEnd, bool dropStreamout = false)
 	{
+		ProcessDeallocations();
 		size_t i = 0;
 		while (i < s_allCacheNodes.size())
 		{
@@ -1456,7 +1463,7 @@ public:
 				i++;
 				continue;
 			}
-			if(!node->isRAMOnly())
+			if(!dropStreamout && !node->isRAMOnly() && node->GetFrameAge() < 60)
 			{
 				i++;
 				continue;
@@ -1480,6 +1487,7 @@ public:
 		auto newRange = new BufferCacheNode(rangeBegin, rangeEnd);
 		if (!newRange->allocateCacheMemory())
 		{
+			ProcessDeallocations();
 			// not enough memory available, try to drop ram-only ranges from the ones we replace
 			for (size_t i = 0; i < overlappingObjects.size(); i++)
 			{
@@ -1495,7 +1503,21 @@ public:
 			if (!newRange->allocateCacheMemory())
 			{
 				cemuLog_log(LogType::Force, "Out-of-memory in GPU buffer (trying to allocate: {}KB) Cleaning up cache...", (rangeEnd - rangeBegin + 1023) / 1024);
-				CleanupCacheAggressive(rangeBegin, rangeEnd);
+				CleanupCacheAggressive(rangeBegin, rangeEnd, false);
+				if (!newRange->allocateCacheMemory())
+				{
+					for (size_t i = 0; i < overlappingObjects.size(); i++)
+					{
+						BufferCacheNode* nodeItr = overlappingObjects[i];
+						if (nodeItr && !nodeItr->isInUse())
+						{
+							nodeItr->ReleaseCacheMemoryImmediately();
+							delete nodeItr;
+							overlappingObjects[i] = nullptr;
+						}
+					}
+					CleanupCacheAggressive(rangeBegin, rangeEnd, true);
+				}
 				if (!newRange->allocateCacheMemory())
 				{
 					cemuLog_log(LogType::Force, "Failed to free enough memory in GPU buffer");

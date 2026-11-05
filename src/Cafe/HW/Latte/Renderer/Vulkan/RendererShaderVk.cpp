@@ -437,7 +437,8 @@ void RendererShaderVk::ShaderCacheLoading_begin(uint64 cacheTitleId)
 		s_spirvCache = nullptr;
 	}
 	uint32 spirvCacheMagic = GeneratePrecompiledCacheId();
-	const std::string cacheFilename = fmt::format("{:016x}_spirv.bin", cacheTitleId);
+	// (BotW PC Edition: its own file, the shaders have the motion vectors of frame generation)
+	const std::string cacheFilename = fmt::format("{:016x}_spirv_mv.bin", cacheTitleId);
 	const fs::path cachePath = ActiveSettings::GetCachePath("shaderCache/precompiled/{}", cacheFilename);
 	s_spirvCache = FileCache::Open(cachePath, true, spirvCacheMagic);
 	if (s_spirvCache == nullptr)

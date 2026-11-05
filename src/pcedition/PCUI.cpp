@@ -523,7 +523,7 @@ namespace pce::UI
 				const uint32 root = memory_readU32(lyt + 0x0C);
 				bool shown = ScreenShownObj(name, obj);
 				if (name == "AppMap_00")
-					shown = mapOnTv; // otherwise it is the GamePad map
+					shown = shown && mapOnTv && !ScreenVisible("AppMapDungeon_00"); // otherwise it is the GamePad/HUD map or replaced by 3D dungeon map
 				sRootShown[root] = shown;
 				sRootScreen[root] = name;
 			}
@@ -711,7 +711,9 @@ namespace pce::UI
 			if (IsMenuScreen(screen))
 			{
 				const bool pause = screen.rfind("Pause", 0) == 0;
-				uint16 g = 0;
+				const uint16 atk = act(pce::Action::Attack) ? act(pce::Action::Attack) : lmb;
+			const uint16 bow = act(pce::Action::Bow) ? act(pce::Action::Bow) : rmb;
+			uint16 g = 0;
 				switch (code)
 				{
 				case 0xE040: g = lmb; break;                                   // select = click
@@ -724,20 +726,22 @@ namespace pce::UI
 				}
 				return g ? g : DefaultGlyphFor(s, code);
 			}
+			const uint16 atk = act(pce::Action::Attack) ? act(pce::Action::Attack) : lmb;
+			const uint16 bow = act(pce::Action::Bow) ? act(pce::Action::Bow) : rmb;
 			uint16 g = 0;
 			if (sHeldItems && label == "Drop")
-				g = lmb;
+				g = atk;
 			else if (sHeldItems && label == "Put away")
-				g = rmb;
+				g = bow;
 			else if (has("Place pin") || has("Throw"))
-				g = lmb;
+				g = atk;
 			else if (has("Quit") || has("Cancel") || (has("Detonate") && !s.bombKeepsBow))
-				g = rmb;
+				g = bow;
 			else if (has("Let go") && sActionOffered)
 				g = 0; // climbing with a fruit in reach: the interact key takes it, letting go is on its own button
 			else if (has("Let go") || has("Skip"))
 				g = act(pce::Action::Interact);
-			else if (has("Dash"))
+			else if (has("Dash") && code == 0xE042)
 				g = act(pce::Action::Sprint);
 			else if ((has("Push") || has("Pull") || has("Far") || has("Near")) && !sThrowShown)
 				g = kGlyphWheelUpDown; // (not with something to throw: a text of another language may stand for several)
@@ -1018,7 +1022,7 @@ namespace pce::UI
 						}
 						uint16 glyph = PromptGlyph(pane, (uint16)(0xE040 + bi), "DoCommand_00", label, s);
 						if (name[9] == 'A' && runeMode)
-							glyph = Prompts::KeyGlyph(Key::MouseLeft); // rune aiming: left click activates
+							glyph = Prompts::ActionGlyph(s, pce::Action::Attack); // rune aiming: attack key (left click) activates
 						if (glyph)
 							out.push_back({r, glyph, alpha});
 					}
@@ -1409,6 +1413,14 @@ namespace pce::UI
 				uint32 group = it.group;
 				if (name.rfind("Pa_PagePorch", 0) == 0)
 					group = pane;
+				if (name.rfind("Pa_PagePorch", 0) == 0)
+				{
+					// PauseMenu_00 keeps 3 Pa_PagePorch panes under N_Cut_00 (prev at x=-500, current at x=0, next at x=+500).
+					// Skip off-page neighbors so the next page's slots (sitting around screen center x=0.46..0.88) are never selectable.
+					if (std::fabs(RF(pane + kTranslate)) > 200.0f)
+						continue;
+					group = pane;
+				}
 				else if (name.rfind("Pa_", 0) == 0 && name.rfind("Pa_Rstick", 0) != 0)
 				{
 					part = pane;
@@ -1483,6 +1495,11 @@ namespace pce::UI
 							ps.mapCtrl = ctrl + 0x648;
 					}
 				}
+				else if (name == "N_Sunaarashi_00" || name == "N_Dungeon_00")
+				{
+					if (alpha >= 16)
+						ps.mapBlocked = true;
+				}
 				else if (name.rfind("T_", 0) == 0 && part && alpha >= 16)
 				{
 					auto ti = sTexts.find(pane);
@@ -1528,7 +1545,10 @@ namespace pce::UI
 		{
 			RebuildRoots();
 			ps = PointerSnapshot{};
+			ps = PointerSnapshot{};
 			ps.valid = true;
+			if (ScreenVisible("AppMapDungeon_00"))
+				ps.mapBlocked = true;
 			std::unordered_map<uint32, PartInfo> parts;
 			for (auto& [root, shown] : sRootShown)
 			{
@@ -1668,17 +1688,19 @@ namespace pce::UI
 		info.normRadius = 79.0f / kLayoutH;
 
 		// the panes are found once per layout (it is read every frame: the walk is not repeated while they stay valid)
-		static uint32 sCacheRoot = 0, sCacheIconArea = 0, sCacheNorth = 0, sCacheRotate = 0, sCacheMiniLine = 0, sCacheMapSR = 0, sCacheMapT = 0;
+		static uint32 sCacheRoot = 0, sCacheIconArea = 0, sCacheNorth = 0, sCacheRotate = 0, sCacheMiniLine = 0, sCacheMapSR = 0, sCacheMapT = 0, sCacheSuna = 0, sCacheDungeon = 0;
 		uint32 iconAreaPane = 0;
 		uint32 northPane = 0;
 		uint32 rotatePane = 0;
 		uint32 miniLinePane = 0;
 		uint32 mapSRPane = 0; // the map's scale and rotation
 		uint32 mapTPane = 0;  // the map moved by Link's position
+		uint32 sunaPane = 0;  // sandstorm static overlay (N_Sunaarashi_00)
+		uint32 dungeonPane = 0; // dungeon map pane (N_Dungeon_00)
 
 		auto searchRoot = [&](const std::string& scrName) {
 			auto it = sScreens.find(scrName);
-			if (it == sScreens.end() || !ValidPtr(it->second, 0x40))
+			if (it == sScreens.end() || !ScreenShownObj(scrName, it->second) || !ValidPtr(it->second, 0x40))
 				return;
 			const uint32 lyt = memory_readU32(it->second + 0x18);
 			if (!ValidPtr(lyt, 0x10))
@@ -1689,7 +1711,7 @@ namespace pce::UI
 			auto still = [](uint32 pane, const char* name) { return pane == 0 || (PaneOk(pane) && ReadName(pane) == name); };
 			if (root == sCacheRoot && (sCacheIconArea || sCacheRotate) && still(sCacheIconArea, "N_IconArea_00") && still(sCacheNorth, "Pa_North_00") &&
 				still(sCacheRotate, "N_Rotate_00") && still(sCacheMiniLine, "N_MiniMapLine_00") && still(sCacheMapSR, "N_MapSR_00") &&
-				still(sCacheMapT, "N_MapT_00"))
+				still(sCacheMapT, "N_MapT_00") && still(sCacheSuna, "N_Sunaarashi_00") && still(sCacheDungeon, "N_Dungeon_00"))
 			{
 				iconAreaPane = sCacheIconArea;
 				northPane = sCacheNorth;
@@ -1697,6 +1719,8 @@ namespace pce::UI
 				miniLinePane = sCacheMiniLine;
 				mapSRPane = sCacheMapSR;
 				mapTPane = sCacheMapT;
+				sunaPane = sCacheSuna;
+				dungeonPane = sCacheDungeon;
 				return;
 			}
 
@@ -1716,8 +1740,12 @@ namespace pce::UI
 					mapSRPane = pane;
 				else if (n == "N_MapT_00" && !mapTPane)
 					mapTPane = pane;
+				else if (n == "N_Sunaarashi_00" && !sunaPane)
+					sunaPane = pane;
+				else if (n == "N_Dungeon_00" && !dungeonPane)
+					dungeonPane = pane;
 
-				if (iconAreaPane && northPane && rotatePane && mapSRPane && mapTPane)
+				if (iconAreaPane && northPane && rotatePane && mapSRPane && mapTPane && sunaPane && dungeonPane)
 					return;
 
 				const uint32 head = pane + kChildHead;
@@ -1738,9 +1766,18 @@ namespace pce::UI
 			sCacheMiniLine = miniLinePane;
 			sCacheMapSR = mapSRPane;
 			sCacheMapT = mapTPane;
+			sCacheSuna = sunaPane;
+			sCacheDungeon = dungeonPane;
 		};
 
 		searchRoot("AppMap_00");
+		if (ScreenVisible("AppMapDungeon_00") ||
+			(sunaPane && PaneOk(sunaPane) && AlphaChain(sunaPane, false) > 0.05f) ||
+			(dungeonPane && PaneOk(dungeonPane) && AlphaChain(dungeonPane, false) > 0.05f) ||
+			(mapTPane && PaneOk(mapTPane) && AlphaChain(mapTPane, false) <= 0.05f))
+		{
+			return info;
+		}
 
 		const uint32 geomPane = iconAreaPane ? iconAreaPane : (northPane ? northPane : miniLinePane);
 		if (geomPane && PaneOk(geomPane))
@@ -1816,6 +1853,43 @@ namespace pce::UI
 			RefreshDoCommand(sState, prompts);
 		}
 		MinimapFrame mini;
+		{
+			static int sLastMinimapZoom = 0;
+			const int zoomSetting = GetSettings().minimapZoom;
+			std::lock_guard lock(sMutex);
+			if (!sState.map)
+			{
+				auto it = sScreens.find("AppMap_00");
+				if (it != sScreens.end() && ValidPtr(it->second, 0x2200) && ScreenShownObj(it->first, it->second))
+				{
+					const uint32 appMapObj = it->second;
+					const uint32 paMap = memory_readU32(appMapObj + 0x1B68);
+					if (ValidPtr(paMap, 0x500))
+					{
+						const uint32 ctrl = memory_readU32(paMap + 0x478);
+						if (ValidPtr(ctrl, 0x700) && memory_readU32(ctrl + 0x640) == 0)
+						{
+							const uint32 curZoom = memory_readU32(ctrl + 0x648 + 0x38);
+							const float curScale = RF(ctrl + 0x648 + 0x18);
+							if (curZoom <= 3 && curScale >= 0.01f && curScale <= 2.0f)
+							{
+								if (zoomSetting >= 1 && zoomSetting <= 4)
+								{
+									const uint32 desiredZoom = (uint32)(4 - zoomSetting);
+									if (curZoom != desiredZoom)
+										memory_writeU32(ctrl + 0x648 + 0x38, desiredZoom);
+								}
+								else if (sLastMinimapZoom != 0)
+								{
+									memory_writeU32(appMapObj + 0x217C, 0xFFFFFFFFu);
+								}
+							}
+						}
+					}
+				}
+			}
+			sLastMinimapZoom = zoomSetting;
+		}
 		mini.info = GetMinimapInfo();
 		mini.hasPose = Input::GetPlayerPose(mini.px, mini.py, mini.pz, mini.camYaw);
 		std::lock_guard lock(sHudMutex);

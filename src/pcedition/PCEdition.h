@@ -9,7 +9,7 @@
 namespace pce
 {
 	constexpr const char* kGameTitle = "The Legend of Zelda: Breath of the Wild";
-	constexpr const char* kEditionVersion = "v1.4.0";
+	constexpr const char* kEditionVersion = "v1.4.1";
 	// the game code this edition is written for: update 1.5.0 (title version 208, the same executable in all regions)
 	constexpr uint32 kRequiredUpdateVersion = 208;
 
@@ -66,6 +66,11 @@ namespace pce
 	};
 	std::vector<GameLanguage> GetGameLanguages();
 	uint32 GetUpdateVersion();     // title version of the update that was found (0 if none)
+
+	// Play time tracking (synced with BotW's native PlayReport_PlayTime in game_data.sav + active session timer)
+	void TickPlayTime(double dt);
+	uint64 GetPlayTimeSeconds();
+	std::string FormatPlayTime(bool includeSeconds = false);
 
 	// fatal startup error shown in a minimal native message box (only used if the game cannot start at all)
 	void FatalError(const std::string& message);

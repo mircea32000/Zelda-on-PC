@@ -1,4 +1,5 @@
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanRenderer.h"
+#include "Cafe/HW/Latte/Renderer/Vulkan/VulkanPce.h"
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanAPI.h"
 #include "Cafe/HW/Latte/Renderer/Vulkan/LatteTextureVk.h"
 #include "Cafe/HW/Latte/Renderer/Vulkan/RendererShaderVk.h"
@@ -251,6 +252,9 @@ PipelineInfo* VulkanRenderer::draw_createGraphicsPipeline(uint32 indexCount)
 		{
 			// shaders or pipeline not cached -> asynchronous compilation
 			PipelineCompiler::CompileThreadPool_QueueCompilation(pipelineCompiler);
+			VulkanPce::g_asyncPipelines++; // (BotW PC Edition dev stats)
+			if (cachedFboVk->GetVelocityView())
+				VulkanPce::g_asyncVelocityPipelines++;
 		}
 		else
 		{
@@ -435,6 +439,12 @@ void VulkanRenderer::uniformData_updateUniformVars(uint32 shaderStageIndex, Latt
 	{
 		LatteMRT::GetCurrentFragCoordScale(GET_UNIFORM_DATA_PTR(shader->uniform.loc_fragCoordScale));
 	}
+	if (shader->uniform.loc_pce >= 0)
+	{
+		// BotW PC Edition: the uniforms of the previous frame (motion vectors)
+		VulkanPce::FillUniforms(shader, (uint8*)uniformBuf, m_state.activeFBO && m_state.activeFBO->GetVelocityView(), m_uniformVarBufferPtr,
+			[this](std::span<uint8> data) { return uniformData_uploadUniformDataBufferGetOffset(data); });
+	}
 	if (shader->uniform.loc_verticesPerInstance >= 0)
 	{
 		*(int*)GET_UNIFORM_DATA_PTR(shader->uniform.loc_verticesPerInstance) = m_streamoutState.verticesPerInstance;
@@ -447,6 +457,8 @@ void VulkanRenderer::uniformData_updateUniformVars(uint32 shaderStageIndex, Latt
 		}
 	}
 	dynamicOffsetInfo.uniformVarBufferOffset[shaderStageIndex] = uniformData_uploadUniformDataBufferGetOffset({(uint8*)uniformBuf, shader->uniform.uniformRangeSize});
+	if (shader->uniform.loc_pce >= 0 && shader->uniform.loc_remapped >= 0)
+		VulkanPce::OnVertexUniforms(dynamicOffsetInfo.uniformVarBufferOffset[shaderStageIndex] + shader->uniform.loc_remapped);
 }
 
 void VulkanRenderer::uniformData_updateUniformVarsIncremental(uint32 shaderStageIndex, LatteDecompilerShader* shader, uint8& stageUniformModifiedMask, float* __restrict uniformBuf, bool aluConstDirty, uint32 uniformBufferDirtyMask)
@@ -466,6 +478,13 @@ void VulkanRenderer::uniformData_updateUniformVarsIncremental(uint32 shaderStage
 	{
 		cemu_assert_debug(shader->uniformMode == LATTE_DECOMPILER_UNIFORM_MODE_REMAPPED);
 		hasChange = LatteBufferCache_LoadRemappedUniforms(shader, GET_UNIFORM_DATA_PTR(shader->uniform.loc_remapped), aluConstDirty, uniformBufferDirtyMask);
+	}
+	if (shader->uniform.loc_pce >= 0)
+	{
+		// BotW PC Edition: the uniforms of the previous frame (motion vectors, every draw is another object)
+		if (VulkanPce::FillUniforms(shader, (uint8*)uniformBuf, m_state.activeFBO && m_state.activeFBO->GetVelocityView(), m_uniformVarBufferPtr,
+				[this](std::span<uint8> data) { return uniformData_uploadUniformDataBufferGetOffset(data); }))
+			hasChange = true;
 	}
 	if (shader->uniform.loc_uniformRegister >= 0 && aluConstDirty)
 	{
@@ -496,6 +515,8 @@ void VulkanRenderer::uniformData_updateUniformVarsIncremental(uint32 shaderStage
 		dynamicOffsetInfo.uniformVarBufferOffset[shaderStageIndex] = uniformData_uploadUniformDataBufferGetOffset({(uint8*)uniformBuf, shader->uniform.uniformRangeSize});
 		stageUniformModifiedMask |= (1 << shaderStageIndex);
 	}
+	if (shader->uniform.loc_pce >= 0 && shader->uniform.loc_remapped >= 0)
+		VulkanPce::OnVertexUniforms(dynamicOffsetInfo.uniformVarBufferOffset[shaderStageIndex] + shader->uniform.loc_remapped);
 }
 
 void VulkanRenderer::draw_prepareDynamicOffsetsForDescriptorSet(uint32 shaderStageIndex, uint32* dynamicOffsets, sint32& numDynOffsets, const PipelineInfo* pipeline_info)
@@ -987,6 +1008,26 @@ VkDescriptorSetInfo* VulkanRenderer::draw_getOrCreateDescriptorSet(PipelineInfo*
 		dsInfo->statsNumStorageBuffers++;
 	}
 
+	// BotW PC Edition: the uniforms of the previous frame (motion vectors) are in the uniform ring buffer
+	VkDescriptorBufferInfo pcePrevBufferInfo{};
+	if (shader->resourceMapping.pcePrevBindingPoint >= 0)
+	{
+		pcePrevBufferInfo.buffer = m_uniformVarBuffer;
+		pcePrevBufferInfo.offset = 0;
+		pcePrevBufferInfo.range = VK_WHOLE_SIZE;
+		VkWriteDescriptorSet write_descriptor{};
+		write_descriptor.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		write_descriptor.dstSet = result;
+		write_descriptor.dstBinding = shader->resourceMapping.pcePrevBindingPoint;
+		write_descriptor.dstArrayElement = 0;
+		write_descriptor.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		write_descriptor.descriptorCount = 1;
+		write_descriptor.pBufferInfo = &pcePrevBufferInfo;
+		descriptorWrites.emplace_back(write_descriptor);
+		performanceMonitor.vk.numDescriptorStorageBuffers.increment();
+		dsInfo->statsNumStorageBuffers++;
+	}
+
 	if (!descriptorWrites.empty())
 		vkUpdateDescriptorSets(m_logicalDevice, (uint32)descriptorWrites.size(), descriptorWrites.data(), 0, nullptr);
 
@@ -1230,6 +1271,8 @@ void VulkanRenderer::draw_setRenderPass()
 		sync_inputTexturesChanged();
 
 	sync_RenderPassLoadTextures(fboVk);
+	if (fboVk->GetVelocityView())
+		VulkanPce::BeginVelocityPass(m_state.currentCommandBuffer, fboVk->GetVelocityView()); // BotW PC Edition
 
 	if (m_featureControl.deviceExtensions.dynamic_rendering)
 	{
@@ -1390,7 +1433,8 @@ void VulkanRenderer::draw_execute_first(uint32 baseVertex, uint32 baseInstance, 
 	if (geometryShader)
 		uniformData_updateUniformVars(VulkanRendererConst::SHADER_STAGE_INDEX_GEOMETRY, geometryShader, s_vkUniformDataGS);
 	// store where the read pointer should go after command buffer execution
-	m_cmdBufferUniformRingbufIndices[m_commandBufferIndex] = m_uniformVarBufferWriteIndex;
+	// (BotW PC Edition: the start of this frame's data, the next frame reads the motion vector uniforms in it)
+	m_cmdBufferUniformRingbufIndices[m_commandBufferIndex] = m_pceUniformHold;
 
 	// process index data
 	const LattePrimitiveMode primitiveMode = static_cast<LattePrimitiveMode>(LatteGPUState.contextRegister[mmVGT_PRIMITIVE_TYPE]);
@@ -1558,7 +1602,8 @@ void VulkanRenderer::draw_execute_continued(uint32 baseVertex, uint32 baseInstan
 	if (geometryShader)
 		uniformData_updateUniformVarsIncremental(VulkanRendererConst::SHADER_STAGE_INDEX_GEOMETRY, geometryShader, stageUniformModifiedMask, s_vkUniformDataGS, false, drawcallContext.gsUniformBufferDirtyMask);
 	// store where the read pointer should go after command buffer execution
-	m_cmdBufferUniformRingbufIndices[m_commandBufferIndex] = m_uniformVarBufferWriteIndex;
+	// (BotW PC Edition: the start of this frame's data, the next frame reads the motion vector uniforms in it)
+	m_cmdBufferUniformRingbufIndices[m_commandBufferIndex] = m_pceUniformHold;
 
 	// process index data
 	const LattePrimitiveMode primitiveMode = static_cast<LattePrimitiveMode>(LatteGPUState.contextRegister[mmVGT_PRIMITIVE_TYPE]);
@@ -1747,12 +1792,15 @@ void VulkanRenderer::draw_execute_continued(uint32 baseVertex, uint32 baseInstan
 }
 
 void LatteFrameTrace_OnDraw(); // Zelda on PC dev tool (LatteRenderTarget.cpp)
+void LatteFgTrace_OnDraw(uint32 baseVertex, uint32 instanceCount, uint32 count, MPTR indexData); // (LatteRenderTarget.cpp)
 void LatteFSR_OnDraw(bool isFirstOfPass); // Zelda on PC FSR 3 inputs (LatteRenderTarget.cpp)
 extern bool g_latteFsrActive;
 
 void VulkanRenderer::draw_execute(uint32 baseVertex, uint32 baseInstance, uint32 instanceCount, uint32 count, MPTR indexDataMPTR, Latte::LATTE_VGT_DMA_INDEX_TYPE::E_INDEX_TYPE indexType, const LatteDrawcallContext& drawcallContext)
 {
 	LatteFrameTrace_OnDraw();
+	LatteFgTrace_OnDraw(baseVertex, instanceCount, count, indexDataMPTR);
+	VulkanPce::SetDraw(baseVertex, instanceCount, count, indexDataMPTR);
 	if (g_latteFsrActive)
 		LatteFSR_OnDraw(drawcallContext.isFirst);
 	if (drawcallContext.isFirst)

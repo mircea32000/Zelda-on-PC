@@ -13,7 +13,7 @@
 #define AppExe "ZeldaOnPC.exe"
 #define ShortcutComment "The Legend of Zelda: Breath of the Wild on PC"
 #ifndef AppVersion
-  #define AppVersion "1.4.0"
+  #define AppVersion "1.4.1"
 #endif
 #ifndef StageDir
   #define StageDir "..\build\stage"

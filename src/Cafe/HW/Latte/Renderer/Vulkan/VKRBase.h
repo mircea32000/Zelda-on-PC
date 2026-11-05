@@ -196,6 +196,7 @@ public:
 	VkFormat m_colorAttachmentFormat[Latte::GPU_LIMITS::NUM_COLOR_ATTACHMENTS];
 	VkFormat m_depthAttachmentFormat;
 	uint64 m_hashForPipeline; // helper var. Holds hash of all the renderpass creation parameters (mainly the formats) that affect the pipeline state
+	bool m_pceVelocity{false}; // BotW PC Edition: color 6 is the velocity attachment (VulkanPce, written where depth is written)
 };
 
 class VKRObjectFramebuffer : public VKRDestructibleObject
