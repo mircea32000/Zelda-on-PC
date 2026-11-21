@@ -459,18 +459,19 @@ namespace pce
 			// the base game itself was given (folder, archive or disc image): update and DLC are usually right next to it
 			if (ReadLooseTitle(root) || IsArchive(root) || IsDiscImage(root))
 				CollectTitles(root.parent_path(), 1, titles);
-			const GameTitle* base = nullptr;
+			// copy by value: pushing Cemu titles below can reallocate titles and invalidate pointers into it
+			GameTitle base;
 			for (auto& t : titles)
 			{
 				if ((uint32)(t.titleId >> 32) == kHighBase)
 				{
-					base = &t;
+					base = t;
 					break;
 				}
 			}
-			if (!base)
+			if (base.empty())
 				return false;
-			const uint32 region = (uint32)base->titleId;
+			const uint32 region = (uint32)base.titleId;
 			// the folders of an existing Cemu installation are searched last
 			const fs::path cemuTitles = CemuTitleDir();
 			for (uint32 high : {kHighUpdate, kHighAoc})
@@ -486,7 +487,7 @@ namespace pce
 				}
 				return nullptr;
 			};
-			sBase = *base;
+			sBase = base;
 			sRegion = region;
 			sUpdate = {};
 			sAoc = {};
